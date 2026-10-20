@@ -42,16 +42,20 @@ import json, math, sys, collections
 
 
 def loader(path):
-    """Read an Overpass JSON file -> (nodes, ways, rels): node and way dicts keyed by OSM id, relations as a list."""
+    """Read an Overpass JSON dump into node/way/relation dicts keyed by id.
+
+    An Overpass `out body; >; out skel qt;` dump lists every way twice: once with its tags and once as a bare
+    skeleton from the node recursion. The tagged copy must win, otherwise names, highway classes and bridge/tunnel
+    tags vanish (that silently dropped the transverse roads and most main streets the first time round)."""
     d = json.load(open(path))
-    nodes = {}
-    ways = {}
-    rels = []
+    nodes, ways, rels = {}, {}, []
     for e in d['elements']:
         if e['type'] == 'node':
-            nodes[e['id']] = e
+            if e['id'] not in nodes or e.get('tags'):
+                nodes[e['id']] = e
         elif e['type'] == 'way':
-            ways[e['id']] = e
+            if e['id'] not in ways or e.get('tags'):
+                ways[e['id']] = e
         else:
             rels.append(e)
     return nodes, ways, rels

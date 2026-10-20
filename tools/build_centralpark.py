@@ -36,7 +36,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from geom import centroid, decompose, l2w, min_rect, point_in_poly, poly_area, rect_faces
 from landscape import Landscape
-from mapkit import GROUND, LAYER, MapKit, rest, size
+from mapkit import BOWER, CAFE, GROUND, LAYER, PLAYGROUND, WILLOW, MapKit, rest, size
 from osm import Frame
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -214,10 +214,14 @@ def plane(row, x, y, z_top, lx, ly, yaw=0.0):
     st('planes')
 
 
+KEEP_CLEAR = [(0.0, 0.0, 5.0)]  # (x, y, r): the spawn and anything else props and people must stay out of
+
+
 def put(row, x, y, dz=0.0, s=1.0, yaw=0.0):
-    """Place a row on the terrain at its own position, lifted by dz and the catalogue rest correction."""
+    """Place a row on the terrain at its own position, lifted by dz and the catalogue rest correction. Nothing goes
+    inside a KEEP_CLEAR circle (the spawn, the fountain basins)."""
     h = gz(x, y)
-    if h is None or math.hypot(x, y) < 5.0:  # the spawn (origin) must stay clear: no trees, people or props on it
+    if h is None or any(math.hypot(x - kx, y - ky) < kr for (kx, ky, kr) in KEEP_CLEAR):
         return
     add(row, x, y, h + dz + rest(row) * s, s, s, s, yaw)
 
@@ -353,17 +357,35 @@ for p in F['polys']:
         lvl = water_level(pts)
         xs = [q[0] for q in pts]
         ys = [q[1] for q in pts]
+
+        def inside_w(x, y):
+            return point_in_poly(x, y, pts) and not any(point_in_poly(x, y, h) for h in p['holes'])
+
+        def lay(x, y, t):
+            """Place a t x t tile at centre (x, y) if it is fully inside; otherwise split it down to 2 m so the shore
+            follows the polygon instead of a staircase of big tiles."""
+            global water_tiles
+            corners = [(x + dx, y + dy) for dx in (-t / 2 + 0.2, t / 2 - 0.2) for dy in (-t / 2 + 0.2, t / 2 - 0.2)]
+            n_in = sum(inside_w(cx_, cy_) for cx_, cy_ in corners)
+            if n_in == 4 or (t <= 2.0 and inside_w(x, y)):
+                add(WATER, x, y, lvl, t / 4, t / 4, 1.2)
+                water_tiles += 1
+            elif n_in > 0 and t > 2.0:
+                for dx in (-t / 4, t / 4):
+                    for dy in (-t / 4, t / 4):
+                        lay(x + dx, y + dy, t / 2)
+
         for j in range(int(min(ys) // tile), int(max(ys) // tile) + 1):
             for i in range(int(min(xs) // tile), int(max(xs) // tile) + 1):
-                x, y = (i + 0.5) * tile, (j + 0.5) * tile
-                if point_in_poly(x, y, pts) and not any(point_in_poly(x, y, h) for h in p['holes']):
-                    add(WATER, x, y, lvl, tile / 4, tile / 4, 1.2)
-                    water_tiles += 1
+                lay((i + 0.5) * tile, (j + 0.5) * tile, tile)
         mark_poly(pts, 2, p['holes'])
         if inside:  # a rocky bank hides the water sheet's edge where the ground dips below it
             for x, y, yaw, dist in along_line(pts + pts[:1], 12.0):
                 put(rng.choice(ROCKS), *l2w(x, y, yaw, 0, 1.2), 0.0, rng.uniform(0.7, 1.3), rng.uniform(0, 6.28))
                 st('bank_rocks')
+                if not NO_TREES and a > 1e4 and int(dist) % 48 == 0:
+                    put(WILLOW, *l2w(x, y, yaw, 0, 6.0), 0.0, rng.uniform(0.8, 1.1), rng.uniform(0, 6.28))
+                    st('willows')
         if tags.get('name') == 'The Lake':
             n = 0
             for _ in range(800):
@@ -574,9 +596,21 @@ for l in F['lines']:
     L, W = (lx, ly) if lx >= ly else (ly, lx)
     th = th if lx >= ly else th + math.pi / 2
     nm = l['tags'].get('name') or ''
-    kit.bridge(
-        cx, cy, L, W, th, 4.8 if near_transverse(cx, cy) else 3.4, deck='wood' if 'Bow' in nm else 'flagstone', name=nm
-    )
+    if (
+        L < 16 and not any(k in nm for k in ('Bow', 'Gapstow', 'Arch', 'Bridge')) and not near_transverse(cx, cy)
+    ):  # named arches and bridges are stone; the rest rustic wood
+        kit.wooden_bridge(cx, cy, L, W, th, 3.0)
+    else:
+        kit.bridge(
+            cx,
+            cy,
+            L,
+            W,
+            th,
+            4.8 if near_transverse(cx, cy) else 3.4,
+            deck='wood' if 'Bow' in nm else 'flagstone',
+            name=nm,
+        )
     arch_centres.append((cx, cy))
 for l in F['lines']:
     if l['tags'].get('bridge') != 'yes' or l['kind'] not in (
@@ -597,15 +631,18 @@ for l in F['lines']:
     if L < 6 or any(math.hypot(cx - ox, cy - oy) < 14 for (ox, oy) in arch_centres):
         continue
     W = (parse_width(l['tags'].get('width')) or PATH_W.get(l['kind'], 3.6)) + 1.0
-    kit.bridge(
-        cx,
-        cy,
-        L + 2.0,
-        W,
-        math.atan2(y1 - y0, x1 - x0),
-        4.8 if near_transverse(cx, cy) else 3.2,
-        name=l['tags'].get('name') or '',
-    )
+    if L < 14 and 'Arch' not in (l['tags'].get('name') or '') and not near_transverse(cx, cy):
+        kit.wooden_bridge(cx, cy, L + 2.0, W, math.atan2(y1 - y0, x1 - x0), 3.0)
+    else:
+        kit.bridge(
+            cx,
+            cy,
+            L + 2.0,
+            W,
+            math.atan2(y1 - y0, x1 - x0),
+            4.8 if near_transverse(cx, cy) else 3.2,
+            name=l['tags'].get('name') or '',
+        )
     arch_centres.append((cx, cy))
 # streams (the Gill, the Loch): a ribbon of water tiles with rocks along the banks
 for l in F['lines']:
@@ -679,8 +716,10 @@ for nm, x, y in [
     for p in F['points']
     if p['kind'] in ('artwork', 'memorial') and p['tags'].get('name') and in_park(p['x'], p['y'])
 ]:
-    box('grey', x, y, ground(x, y) - 0.2, 1.8, 1.4, 1.4)
-    put(STATUE, x, y, 1.6, 1.3, rng.uniform(0, 6.28))
+    box('black', x, y, ground(x, y) - 0.2, 1.8, 1.6, 1.6)
+    put(
+        rng.choice(PEOPLE), x, y, 1.6, 1.4, rng.uniform(0, 6.28)
+    )  # the only 'statue' mesh is a wire globe; a figure on a plinth reads as bronze
     st('statues')
 # Terrace Drive crosses the arcade on a 4 m embankment; real stairs drop to the fountain plaza on the Lake side
 ARC = next(l for l in F['lines'] if l['tags'].get('name') == 'Bethesda Arcade')
@@ -704,19 +743,22 @@ FX, FY = l2w(acx, acy, ayaw, un * 44, 0)  # the Angel fountain, on the lower ter
 kit.surface('flagstone', FX, FY, 70, 60, ayaw)
 mark_poly([l2w(FX, FY, ayaw, u, v) for (u, v) in ((-35, -30), (35, -30), (35, 30), (-35, 30))], 3)
 gF = ground(FX, FY) + LAYER['flagstone']
-cylinder('grey', FX, FY, gF - 0.1, 0.9, 29.0)
+KEEP_CLEAR.append((FX, FY, 16.5))
+kit.wall(
+    [(FX + 14.5 * math.cos(q / 48 * 6.2832), FY + 14.5 * math.sin(q / 48 * 6.2832)) for q in range(49)], 'brick', 0.75
+)  # the basin: a solid low masonry ring the water sits inside
+for j_ in range(-4, 5):
+    for i_ in range(-4, 5):
+        if math.hypot(i_ * 3, j_ * 3) < 13.5:
+            add(WATER, FX + i_ * 3, FY + j_ * 3, gF + 0.45, 0.75, 0.75, 1)
 cylinder('grey', FX, FY, gF, 3.0, 3.0)
-cylinder('grey', FX, FY, gF + 3.0, 1.2, 6.0)
-cylinder('grey', FX, FY, gF + 4.2, 2.2, 1.2)
-for j in range(-3, 4):
-    for i in range(-3, 4):
-        if math.hypot(i * 4, j * 4) < 13:
-            add(WATER, FX + i * 4, FY + j * 4, gF + 0.75, 1, 1, 1)
-add(STATUE, FX, FY, gF + 6.4, 2.4, 2.4, 2.4, ayaw + math.pi)
+cylinder('grey', FX, FY, gF + 3.0, 1.0, 6.0)
+cylinder('grey', FX, FY, gF + 4.0, 2.0, 1.2)
+add('NewRow_802', FX, FY, gF + 6.0, 2.6, 2.6, 2.6, ayaw + math.pi)  # the Angel of the Waters as a figure
 st('bethesda')
 for q in range(40):
     a_ = q / 40 * 6.283
-    put(rng.choice(PEOPLE), FX + 17 * math.cos(a_), FY + 17 * math.sin(a_), LAYER['flagstone'], 1.0, a_ + math.pi)
+    put(rng.choice(PEOPLE), FX + 18 * math.cos(a_), FY + 18 * math.sin(a_), LAYER['flagstone'], 1.0, a_ + math.pi)
 
 # ---- 4. hand-placed landmarks OSM only names ---------------------------------------------------------------
 OBX, OBY = ll(40.77962, -73.96541)  # Cleopatra's Needle: 21 m on a granite base
@@ -746,8 +788,12 @@ for q in range(10):
 CHX, CHY = ll(40.77465, -73.97345)  # Cherry Hill fountain and turnaround
 kit.surface('flagstone', CHX, CHY, 40, 40)
 gC = ground(CHX, CHY) + LAYER['flagstone']
-cylinder('grey', CHX, CHY, gC - 0.1, 0.8, 7.0)
+kit.wall(
+    [(CHX + 3.5 * math.cos(q / 16 * 6.2832), CHY + 3.5 * math.sin(q / 16 * 6.2832)) for q in range(17)], 'brick', 0.7
+)
+add(WATER, CHX, CHY, gC + 0.4, 1.5, 1.5, 1)
 cylinder('grey', CHX, CHY, gC, 3.5, 0.8)
+KEEP_CLEAR.append((CHX, CHY, 5.0))
 st('cherry_hill')
 
 # ---- 5. buildings: park structures (asset-first) and the city -----------------------------------------------
@@ -772,12 +818,13 @@ COTTAGES = {
     'Swedish Cottage Marionette Theatre': 'NewRow_788',
     'The Dairy (Visitor Center and Gift Shop)': 'NewRow_790',
     'Chess and Checkers House': 'NewRow_791',
-    'Mineral Springs': 'NewRow_789',
-    "Ladies' Pavilion": 'NewRow_233',
-    'Cop Cot': 'NewRow_233',
-    'Summerhouse at the Dene': 'NewRow_233',
-    'Ballfields Café': 'NewRow_231',
-    'Zoo Tickets': 'NewRow_230',
+    'Mineral Springs': CAFE[0],
+    "Ladies' Pavilion": BOWER,
+    'Cop Cot': BOWER,
+    'Summerhouse at the Dene': BOWER,
+    'Ballfields Café': CAFE[0],
+    'Zoo Tickets': CAFE[1],
+    'Kerbs Boathouse': CAFE[0],
 }
 
 
@@ -873,7 +920,6 @@ for p in F['polys']:
         for q in range(12):
             a_ = q / 12 * 6.283
             box('grey', tx + 4.2 * math.cos(a_), ty + 4.2 * math.sin(a_), base + 20.5, 1.2, 1.0, 1.0, a_)
-        kit.surface('flagstone', *l2w(rx, ry, th, -lx * 0.5 - 8, 0), 16, ly + 10, th, z_base=base)
         kit.stairs(*l2w(rx, ry, th, -lx * 0.5 - 24, 0), th, 11.5, 6.0)
         st('belvedere')
         continue
@@ -882,9 +928,9 @@ for p in F['polys']:
         box('concrete', cx, cy, g, 1.2, 20, 14, pth)
         st('delacorte')
         continue
-    if nm == 'Central Park Carousel':
-        cylinder('default', cx, cy, g - 0.2, 5.2, 16.0)
-        add(PYRAMID, cx, cy, g + 7.5, 18, 18, 5, 0)
+    if nm == 'Central Park Carousel':  # the octagonal gazebo mesh scaled up is a carousel house; riders stand around it
+        bw, bl, bh = size(BOWER)
+        add(BOWER, cx, cy, g - 0.1, 16.0 / bw, 16.0 / bl, 1.4, pth)
         for q in range(12):
             a_ = q / 12 * 6.283
             put(rng.choice(PEOPLE), cx + 11 * math.cos(a_), cy + 11 * math.sin(a_), 0.0, 1.0, a_ + math.pi)
@@ -1158,6 +1204,13 @@ for p in F['polys']:
     nm = p['tags'].get('name') or ''
     if nm == 'Sheep Meadow' or (p['kind'] == 'plaza' and 'Playground' in nm and in_park(*centroid(p['pts']))):
         kit.wall(p['pts'] + p['pts'][:1], 'fence', 1.5)
+        if 'Playground' in nm:
+            cx_, cy_ = centroid(p['pts'])
+            for q in range(5):
+                px_, py_ = cx_ + rng.uniform(-9, 9), cy_ + rng.uniform(-9, 9)
+                if point_in_poly(px_, py_, p['pts']):
+                    put(rng.choice(PLAYGROUND), px_, py_, LAYER['flagstone'], 1.0, rng.uniform(0, 6.28))
+                    st('play_equipment')
         if nm == 'Sheep Meadow':
             xs = [q[0] for q in p['pts']]
             ys = [q[1] for q in p['pts']]
@@ -1404,7 +1457,7 @@ map_json = {
     'WeatherIndex': 0,
     'Race': dict(CheckPoints=[], StartTransform=tf(0, 0, 0, dict(X=0, Y=0, Z=0, W=1)), Laps=1, BestTime=-1, Spoints=[]),
     'CamLoc': tf(cam[0], cam[1], cam[2], quat_pitch_yaw(cam_pitch, cam_yaw)),
-    'CustomWeather': dict(timeOfDay=16.0, northyaw=round(north_yaw, 2), Cloud=0.2),
+    'CustomWeather': dict(timeOfDay=12.5, northyaw=round(north_yaw, 2), Cloud=0.2),
 }
 info = {
     'BaseMapRow': BASE,

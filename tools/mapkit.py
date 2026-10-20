@@ -52,6 +52,11 @@ BENCH = "NewRow_204"  # SM_Bench03 0.9 x 2.19 x 1.04 m: long axis is local Y, se
 KIOSKS = ["NewRow_230", "NewRow_231", "NewRow_233"]  # Christmas booths: market stalls / kiosks
 BUS_STOPS = ["NewRow_29", "NewRow_43"]
 WOOD_DECK = "NewRow_184"  # SM_BaseGround with wood planks: boardwalks and bridge decks
+DECK_ON_POSTS = "NewRow_221"  # SM_Deck_Floor_04 10.3 x 13.2 x 4.1 m: a wooden deck on posts = a rustic footbridge
+BOWER = "NewRow_205"  # SM_Bower02 7.8 x 6.4 x 7.6 m: a park gazebo / pergola
+CAFE = ["NewRow_228", "NewRow_229"]  # SM_CafeBuilding01/04: park cafes
+PLAYGROUND = ["NewRow_287", "NewRow_288", "NewRow_289", "NewRow_293", "NewRow_295", "NewRow_296", "NewRow_643"]
+WILLOW = "NewRow_171"
 GROUND = dict(
     asphalt="NewRow_182",
     pavement="NewRow_185",
@@ -220,32 +225,64 @@ class MapKit:
         self.st("stairs")
 
     # ---- bridges and arches ----------------------------------------------------------------------------------
-    def bridge(self, cx, cy, length, width, yaw, clear_h=3.2, deck="wood", stairs=False, name=""):
-        """A footbridge you can fly under, from real pieces: a stone arch portal (SM_NeoArch scaled to the
-        opening) at each face, a deck between them on the `deck` material, stone parapets along both edges and
-        pitched approaches (or real stairs when `stairs`). `length` runs along `yaw`; the opening is across it."""
-        aL, aW, aH = size(ARCH)
-        sc = (clear_h + 0.8) / aH
-        sw = max(width / aL, sc)
-        H = aH * sc
+    def wooden_bridge(self, cx, cy, length, width, yaw, clear_h=3.2):
+        """A rustic footbridge from the lake-house deck-on-posts mesh (13.2 m long, 10.3 m wide, 4.1 m tall),
+        scaled to the span, with a real flight of stairs at each end. Spans up to about 16 m."""
+        L, W, H = size(DECK_ON_POSTS)
+        sy, sx, sz = (
+            max(0.5, min(1.3, length / L)),
+            max(0.35, min(1.0, width / W)),
+            max(0.8, min(1.2, (clear_h + 0.5) / H)),
+        )
         z0 = self.g(cx, cy)
-        for sgn in (-1, 1):  # the two faces of the bridge
-            ax, ay = l2w(cx, cy, yaw, sgn * (length / 2 - aW * sc / 2), 0)
-            self.add(ARCH, ax, ay, z0 - 0.2, sw, sc, sc, yaw + math.pi / 2)
-        self.box("concrete", cx, cy, z0 + H - 0.5, 0.5, length, width, yaw)
-        self.surface(deck, cx, cy, length, width, yaw, z_base=z0 + H - 0.5)
+        self.add(DECK_ON_POSTS, cx, cy, z0 - 0.2, sx, sy, sz, yaw + math.pi / 2)
+        top = z0 - 0.2 + H * sz
+        for sgn in (-1, 1):
+            foot = l2w(cx, cy, yaw, sgn * (length / 2 + 8.6 * top / 5.67 * 0.5), 0)
+            self.stairs(foot[0], foot[1], yaw + (math.pi if sgn > 0 else 0.0), top - z0, width)
+        self.st("wooden_bridges")
+
+    def bridge(self, cx, cy, length, width, yaw, clear_h=3.2, deck="flagstone", stairs=None, name=""):
+        """A stone footbridge you can fly under, from real pieces: brick piers at each end with a rectangular
+        passage between them (the only arch mesh in the game is a futuristic one, so the opening is square),
+        a concrete deck surfaced with `deck`, stone parapets, and at each end either a real flight of stairs
+        (short footbridges, the default under 24 m) or a textured flagstone ramp between brick embankment walls.
+        `length` runs along `yaw`; the passage runs across it. Heights in metres above the ground at the centre."""
+        z0 = self.g(cx, cy)
+        H = clear_h + 0.6  # deck top
+        if stairs is None:
+            stairs = length < 24
+        pier_t = 1.6
+        for sgn in (-1, 1):  # the two faces: piers either side of the passage
+            u = sgn * (length / 2 - pier_t / 2)
+            for side in (-1, 1):
+                self.box(
+                    "brick", *l2w(cx, cy, yaw, u, side * (width / 2 + 1.0)), z0 - 0.3, H - 0.6 + 0.3, pier_t, 2.0, yaw
+                )
+            self.box(
+                "concrete", *l2w(cx, cy, yaw, u, 0), z0 + H - 0.6, 0.6, pier_t, width + 4.0, yaw
+            )  # lintel over the passage
+        self.box("concrete", cx, cy, z0 + H - 0.6, 0.6, length, width, yaw)
+        self.surface(deck, cx, cy, length, width, yaw, z_base=z0 + H - 0.6)
         for sgn in (-1, 1):
             edge = [
                 l2w(cx, cy, yaw, -length / 2, sgn * (width / 2 - 0.15)),
                 l2w(cx, cy, yaw, length / 2, sgn * (width / 2 - 0.15)),
             ]
             self._raised_parapet(edge, z0 + H)
-            far = l2w(cx, cy, yaw, sgn * (length / 2 + 10), 0)
-            near = l2w(cx, cy, yaw, sgn * length / 2, 0)
+        for sgn in (-1, 1):  # approaches
             if stairs:
-                self.stairs(far[0], far[1], yaw + (math.pi if sgn > 0 else 0.0), H, width)
+                foot = l2w(cx, cy, yaw, sgn * (length / 2 + 8.6 * H / 5.67), 0)
+                self.stairs(foot[0], foot[1], yaw + (math.pi if sgn > 0 else 0.0), H, width)
             else:
-                self._ramp(far, near, self.g(*far), z0 + H, width)
+                run = max(12.0, H * 4.0)
+                far = l2w(cx, cy, yaw, sgn * (length / 2 + run), 0)
+                near = l2w(cx, cy, yaw, sgn * length / 2, 0)
+                self._ramp(far, near, self.g(*far), z0 + H, width, material=deck)
+                for side in (-1, 1):  # embankment walls along the ramp
+                    a_ = l2w(cx, cy, yaw, sgn * (length / 2 + run), side * (width / 2 + 0.3))
+                    b_ = l2w(cx, cy, yaw, sgn * length / 2, side * (width / 2 + 0.3))
+                    self.wall([a_, b_], "brick", H * 0.5)
         self.st("bridges")
 
     def _raised_parapet(self, pts, z):
@@ -257,9 +294,9 @@ class MapKit:
             t = (q + 0.5) / n
             self.add(PARAPET, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, z, L / (n * 0.94), 1.0, 1.0, yaw)
 
-    def _ramp(self, a, b, z0, z1, width, thick=0.4):
-        """Pitched slab from a (height z0) to b (height z1): the generator's cube rows via box() cannot pitch, so
-        this builds the quaternion itself through add()."""
+    def _ramp(self, a, b, z0, z1, width, thick=0.4, material="flagstone"):
+        """Pitched slab from a (height z0) to b (height z1): a textured ground plane tilted to the slope, over a grey
+        cube body so it reads as solid from the side."""
         (x0, y0), (x1, y1) = a, b
         L = math.hypot(x1 - x0, y1 - y0)
         yaw = math.atan2(y1 - y0, x1 - x0)
@@ -271,14 +308,16 @@ class MapKit:
             Z=math.cos(P) * math.sin(Y),
             W=math.cos(P) * math.cos(Y),
         )
+        slant = math.hypot(L, z1 - z0)
+        self.add(CUBE["grey"], (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2 - thick / 2, slant, width, thick, 0.0, rot)
         self.add(
-            CUBE["grey"],
+            GROUND.get(material, material),
             (x0 + x1) / 2,
             (y0 + y1) / 2,
-            (z0 + z1) / 2 - thick / 2,
-            math.hypot(L, z1 - z0),
-            width,
-            thick,
+            (z0 + z1) / 2 + 0.03,
+            slant / 4,
+            width / 4,
+            1.0,
             0.0,
             rot,
         )
