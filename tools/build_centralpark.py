@@ -1,82 +1,67 @@
 #!/usr/bin/env python3
-"""Central Park for Uncrashed, built from OpenStreetMap (data/centralpark_osm.json via tools/osm.py) on the flat
-Empty board. Frame: origin on the Mall at the Literary Walk, the Mall runs up -Y (the freestyle spawn faces -Y, so
-you take off looking up the elm walk to Bethesda Terrace), +X is west. Every lake, lawn, wood, rock outcrop, path,
-drive, arch and building comes from OSM geometry; landmarks that OSM only names (Bethesda Fountain, Belvedere on
-Vista Rock, the Obelisk, Bow Bridge, the Mall's elm rows, the Imagine mosaic) are modelled on top of it. The
-surrounding city uses OSM building footprints with their heights. Aerial reference: data/centralpark_naip.png.
+"""Central Park for Uncrashed, built from OpenStreetMap on the grassy BaseLandscape02 level.
+
+Why this base level: it is the only one with a real grass ground (the Empty board is a numbered grid and Bp_Grass
+renders grey on macOS), it is flat to within 2 m, and its 2.42 km board matches the game's 2.2 km flight box. The
+frame (data/centralpark_frame.json) puts the world origin on the Mall at Bethesda Terrace with the Mall running down
++Y, so the spawn (the level's PlayerStart at the origin, facing -Y) looks north over the fountain and the Lake, and
+the board covers the park from Central Park South to the Great Lawn plus Midtown to about 56th Street.
+
+Data: data/centralpark_features.json from tools/osm.py (polygons: water with islands, lawns, woods, rock, plazas,
+buildings with heights; lines: paths, drives, transverses, bridges, fences, walls, streams, steps; points: mapped
+trees, benches, lamps, statues, vendors). Reference imagery: data/centralpark_naip.png.
+
+Asset-first rule (tools/mapkit.py): real meshes wherever one exists (stone arches and parapets for bridges, Stair_A
+for stairs, concrete fence panels for retaining walls, park fences, benches oriented to their path, kiosks, textured
+building and house meshes), cubes and concrete only for what the catalogue lacks. Every object stands on the terrain
+at its own position (tools/landscape.py sampler). Surfaces sit on per-material height bands so nothing z-fights.
+
+Layers: 1 water and surfaces from polygons, 2 paths/drives/transverse trenches/bridges, 3 the Mall and Bethesda,
+4 hand-placed landmarks, 5 buildings (park structures and the city) with window decals facing the park, 6 trees,
+7 furniture, vendors and people, 8 Columbus Circle and Grand Army Plaza, 9 the Imagine mosaic decal, then output.
+Occupancy grid (4 m): 0 free, 1 path, 2 water, 3 hard, 4 lawn, 5 wood.
 usage: build_centralpark.py [--no-windows] [--lite]
+"""
 
-Inputs (all under data/): centralpark_frame.json (lat0, lon0, axis_deg of the local frame), centralpark_features.json
-(the osm.py output: polys / lines / points in local metres with OSM tags) and catalog.json (mesh bounds per asset
-row, cm). Outputs: maps/CentralPark/ (CentralPark.json, CentralPark.info, Thumbnail.jpg, Decals/*.png), then the
-whole folder is copied into the game's MapEditor/User/CentralPark and the decal PNGs into MapEditor/UserDecals and
-MapEditor/MapDecals (the editor loads user decals from those libraries; without the copies they render blank).
-Running this script installs the map; nothing is committed.
-
-Units and frame: everything in this file is metres and radians (yaw counter-clockwise from +X, math.atan2
-convention) until `tf()` writes Unreal centimetres. The frame is osm.Frame(lat0, lon0, axis_deg, flip_north=True):
-+Y points back down the park axis (south-ish), +X to the west; the Empty board's PlayerStart is the origin facing -Y
-and the board is flat at Z = 0, so `Z0` (6 cm) is the top of the ground surfaces laid here. `BOARD` (2900 m) keeps
-everything inside the 6 km board. Decal transforms use the editor's basis: local X into the surface, Y world-down,
-Z = X x Y along the wall, scale (depth, height/4, width/4); the ground mosaic uses the same rule with X pointing
-down into the pavement.
-
-Layer order (each section also stamps the 4 m occupancy grid `occ` so later layers avoid earlier ones):
-  1. ground: a concrete slab over the city and a green lawn base over the park's bounding rectangle;
-  2. surfaces from OSM polygons: water tiles (with boats and the Reservoir fence), plazas / parking / the rink,
-     lawns (marked, ball fields get a dirt diamond), woods (marked), rock outcrops, fountains;
-  3. paths, drives, transverses and city streets as ground planes, raised decks for bridge=yes segments, the 19
-     mapped arches (man_made=bridge outlines) as fly-through decks on abutments with ramps;
-  4. the Mall (four elm rows, benches, lamps), statues, Bethesda Terrace (embankment, arcade, twin stairs) and the
-     fountain plaza;
-  5. hand-placed landmarks OSM only names: the Obelisk, Strawberry Fields, Tavern on the Green, Cherry Hill;
-  6. buildings: special massing for Belvedere, Delacorte, the Carousel and the Bandshell, generic boxes for the rest
-     (setbacks on tall pre-war-style towers, roof clutter), then window decals on city facades facing the park;
-  7. trees: mapped trees by genus, woods, the rest of the park, street trees;
-  8. furniture and people along the paths, the Sheep Meadow and playground fences, food carts;
-  9. the Imagine mosaic ground decal;
-  output: map JSON, .info, decal PNGs, thumbnail, install.
-
-Occupancy grid `occ` (4 m cells, x -800..800, y -3800..700): 0 free, 1 path (also stamped by placed trees),
-2 water, 3 hard (plaza, building, rock, fountain; also returned outside the grid), 4 lawn (keep clear of trees),
-5 wood. `tree()` refuses 1/2/3, the random park fill also refuses 4."""
-
-import json, math, os, sys, time, hashlib, shutil, random
+import hashlib
+import json
+import math
+import os
+import random
+import shutil
+import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from geom import poly_area, centroid, min_rect, point_in_poly, decompose, rect_faces, l2w
+from geom import centroid, decompose, l2w, min_rect, point_in_poly, poly_area, rect_faces
+from landscape import Landscape
+from mapkit import GROUND, LAYER, MapKit, rest, size
 from osm import Frame
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, 'data')
 STEAM_ID = os.environ.get(
     'UNCRASHED_STEAM_ID', '76561197969360950'
-)  # your Steam ID64: the game loads maps from MapEditor/User under it
+)  # your Steam ID64: maps load from MapEditor/User under it
 GAME_USER_MAPS = os.path.expanduser(f'~/Library/Application Support/Uncrashed/{STEAM_ID}/MapEditor/User')
 NAME, DISPLAY = 'CentralPark', 'New York City - Central Park'
+BASE = 'BaseLandscape02'
 WITH_WINDOWS = '--no-windows' not in sys.argv
 LITE = '--lite' in sys.argv
-rng = random.Random(7)  # fixed seed: the same map every build
+rng = random.Random(7)
 FRAME = json.load(open(os.path.join(DATA, 'centralpark_frame.json')))
-FR = Frame(FRAME['lat0'], FRAME['lon0'], FRAME['axis_deg'], True)  # flip_north: +Y runs back down the axis
+FR = Frame(FRAME['lat0'], FRAME['lon0'], FRAME['axis_deg'], True)
 F = json.load(open(os.path.join(DATA, 'centralpark_features.json')))
-CAT = json.load(open(os.path.join(DATA, 'catalog.json')))
-# JSON gives lists; the geometry helpers hash/compare points, so make them tuples once
 for _p in F['polys']:
     _p['pts'] = [tuple(q) for q in _p['pts']]
     _p['holes'] = [[tuple(q) for q in h] for h in _p['holes']]
 for _l in F['lines']:
     _l['pts'] = [tuple(q) for q in _l['pts']]
-BOARD = 2900.0  # keep inside the 6 km Empty board
-Z0 = 0.06  # ground top (the board's landscape is at 0)
+CAT = json.load(open(os.path.join(DATA, 'catalog.json')))
+LAND = Landscape(os.path.join(DATA, 'extracted/Uncrashed/Content/MapEditor/BaseLevel/L_' + BASE))
+BOARD = 1205.0  # the landscape's far edges; the near edges (+806 m) are enforced by the sampler in add()
 
-# ---- rows ----------------------------------------------------------------------
-# Asset rows of DT_MapEditorAssets (see data/catalog.json and docs/ASSETS.md). Pivots that matter below:
-# cubes / cylinders / pyramid 1 m, centre pivot; CONCRETE = SM_ConcreteFloor01 4x4x0.30 m with the pivot at the TOP;
-# BRICK = SM_ConcreteWall01 0.3x4x4 m, base pivot; ground planes (ASPHALT..SAND) 4x4x0.1 m, centre pivot;
-# WATER = BP_meWater 4 m tile, pivot AT the surface, 2.1 m deep. Props (trees, benches, people, ...) go through
-# put(), which applies the catalog rest() correction.
+# ---- rows ----------------------------------------------------------------------------------------------------
 CUBE = dict(
     default='NewRow_13',
     yellow='NewRow_46',
@@ -89,131 +74,97 @@ CUBE = dict(
 )
 CYL = dict(default='NewRow_14', grey='NewRow_261', black='NewRow_113', yellow='NewRow_64', red='NewRow_89')
 CONCRETE, BRICK, PYRAMID = 'NewRow_303', 'NewRow_318', 'NewRow_143'
-ASPHALT, PAVE, PAVE2, DIRT, GRAVEL, SAND, WATER = (
-    'NewRow_182',
-    'NewRow_185',
-    'NewRow_197',
-    'NewRow_180',
-    'NewRow_181',
-    'NewRow_662',
-    'NewRow_183',
-)
-ELM, MAPLE, ALDER, OAK, BIG_ELM, PINES = (
-    'NewRow_168',
-    'NewRow_269',
-    'NewRow_34',
-    'NewRow_78',
-    'NewRow_169',
-    ['NewRow_279', 'NewRow_280', 'NewRow_281'],
-)
+WATER = 'NewRow_183'
+ELM, MAPLE, ALDER, OAK, BIG_ELM = 'NewRow_168', 'NewRow_269', 'NewRow_34', 'NewRow_78', 'NewRow_169'
+PINES = ['NewRow_279', 'NewRow_280', 'NewRow_281']
 TREES = [ELM, MAPLE, ALDER]
 BUSHES = ['NewRow_164', 'NewRow_226']
 ROCKS = ['NewRow_71', 'NewRow_162']
 CLIFF = 'NewRow_175'
-LAMP_TALL, LAMP_SHORT, BENCH, TRASH, FENCE, HANDRAIL, STATUE = (
-    'NewRow_3',
-    'NewRow_20',
-    'NewRow_204',
-    'NewRow_323',
-    'NewRow_777',
-    'NewRow_276',
-    'NewRow_213',
-)
-PEOPLE, PEOPLE_SIT = ['NewRow_252', 'NewRow_255', 'NewRow_801', 'NewRow_802'], ['NewRow_254', 'NewRow_800']
+LAMP_TALL, LAMP_SHORT, TRASH, STATUE = 'NewRow_3', 'NewRow_20', 'NewRow_323', 'NewRow_213'
+PEOPLE = ['NewRow_252', 'NewRow_255', 'NewRow_801', 'NewRow_802']
+PEOPLE_SIT = ['NewRow_254', 'NewRow_800']
 CARS = ['NewRow_103', 'NewRow_257', 'NewRow_93', 'NewRow_775']
-BOAT, FOOD_CART, FOOD_STALL, TABLE, CHAIR = 'NewRow_329', 'NewRow_246', 'NewRow_247', 'NewRow_353', 'NewRow_352'
-STAIRS, WATER_TOWER, PLANTER = 'NewRow_106', 'NewRow_251', 'NewRow_159'
+BOAT, FOOD_CART, FOOD_STALL, TABLE, CHAIR, WATER_TOWER = (
+    'NewRow_329',
+    'NewRow_246',
+    'NewRow_247',
+    'NewRow_353',
+    'NewRow_352',
+    'NewRow_251',
+)
+PARK_FENCE = 'NewRow_777'
 
-
-def rest(row):
-    """Vertical correction (m, <= 0) so a mesh placed at ground height rests on the ground instead of hovering.
-
-    `bot` is the mesh's lowest point relative to its pivot (catalog bounds are cm: origin - extent). A mesh whose
-    base sits more than 5 cm ABOVE the pivot would float by that much, so the pivot is lowered by `bot`. Meshes
-    whose base is below the pivot (trees, rocks, houses) get 0: they are meant to sink a little. Rows without bounds
-    (decals, unknown) get 0. Scale the result by the instance scale (see put()).
-    """
-    b = CAT.get(row, {}).get('bounds')
-    if not b:
-        return 0.0
-    bot = (b['origin'][2] - b['extent'][2]) / 100.0
-    return -bot if bot > 0.05 else 0.0
-
-
-instances = {}  # row name -> list of transforms (the S_AssetsTransform payload)
-decal_rows = {}  # decal PNG name -> list of transforms, kept apart so --no-windows can drop them
-decal_files = {}  # decal PNG name -> spec tuple used to render it at output time
-stats = {}  # counters printed at the end
+instances = {}
+decal_rows = {}
+decal_files = {}
+stats = {}
 
 
 def st(k, n=1):
-    """Bump the stats counter `k` by `n`."""
+    """Count an event in the build statistics."""
     stats[k] = stats.get(k, 0) + n
 
 
+# ---- terrain --------------------------------------------------------------------------------------------------
+def gz(x, y):
+    """Ground-top height (m) at local (x, y); None off the landscape."""
+    h = LAND.height_cm(x * 100, y * 100)
+    return None if h is None else h / 100.0 + 0.03
+
+
+G0 = gz(0, 0)
+
+
+def ground(x, y):
+    """Ground height for placement; off-landscape points fall back to the origin height (callers check BOARD)."""
+    h = gz(x, y)
+    return G0 if h is None else h
+
+
+print(f'landscape {BASE}: ground at the origin {G0:.2f} m')
+
+
+# ---- transforms and primitives -------------------------------------------------------------------------------
 def quat_yaw(yaw):
-    """Quaternion (dict X, Y, Z, W) for a rotation about Z by `yaw` radians: Z = sin(yaw/2), W = cos(yaw/2)."""
+    """Quaternion for a yaw (radians) about +Z."""
     return dict(X=0.0, Y=0.0, Z=math.sin(yaw / 2), W=math.cos(yaw / 2))
 
 
 def quat_pitch_yaw(pitch_deg, yaw_deg):
-    """Quaternion for an Unreal rotator (pitch, yaw, roll = 0), both in DEGREES (note: unlike quat_yaw).
-
-    Same formula as FRotator::Quaternion with the roll terms removed; positive pitch tilts the local +X up.
-    """
+    """Quaternion for pitch then yaw in degrees (roll 0), as UE's FRotator::Quaternion."""
     P, Y = math.radians(pitch_deg) / 2, math.radians(yaw_deg) / 2
     SP, CP, SY, CY = math.sin(P), math.cos(P), math.sin(Y), math.cos(Y)
     return dict(X=SP * SY, Y=-SP * CY, Z=CP * SY, W=CP * CY)
 
 
 def quat_from_axes(X, Y, Z):
-    """Quaternion whose local X, Y, Z axes are the given world unit vectors (3-tuples, right-handed, orthonormal).
-
-    Builds the rotation matrix with the axes as columns and converts it with the standard trace / largest-diagonal
-    branch method (numerically safe for every orientation). Used for decals, whose basis is not a plain yaw.
-    """
+    """Quaternion whose rotation maps the local axes onto the given orthonormal world vectors."""
     m = [[X[0], Y[0], Z[0]], [X[1], Y[1], Z[1]], [X[2], Y[2], Z[2]]]
     t = m[0][0] + m[1][1] + m[2][2]
     if t > 0:
         s = math.sqrt(t + 1) * 2
-        w = s / 4
-        x = (m[2][1] - m[1][2]) / s
-        y = (m[0][2] - m[2][0]) / s
-        z = (m[1][0] - m[0][1]) / s
+        w, x, y, z = s / 4, (m[2][1] - m[1][2]) / s, (m[0][2] - m[2][0]) / s, (m[1][0] - m[0][1]) / s
     elif m[0][0] > m[1][1] and m[0][0] > m[2][2]:
         s = math.sqrt(1 + m[0][0] - m[1][1] - m[2][2]) * 2
-        w = (m[2][1] - m[1][2]) / s
-        x = s / 4
-        y = (m[0][1] + m[1][0]) / s
-        z = (m[0][2] + m[2][0]) / s
+        w, x, y, z = (m[2][1] - m[1][2]) / s, s / 4, (m[0][1] + m[1][0]) / s, (m[0][2] + m[2][0]) / s
     elif m[1][1] > m[2][2]:
         s = math.sqrt(1 + m[1][1] - m[0][0] - m[2][2]) * 2
-        w = (m[0][2] - m[2][0]) / s
-        x = (m[0][1] + m[1][0]) / s
-        y = s / 4
-        z = (m[1][2] + m[2][1]) / s
+        w, x, y, z = (m[0][2] - m[2][0]) / s, (m[0][1] + m[1][0]) / s, s / 4, (m[1][2] + m[2][1]) / s
     else:
         s = math.sqrt(1 + m[2][2] - m[0][0] - m[1][1]) * 2
-        w = (m[1][0] - m[0][1]) / s
-        x = (m[0][2] + m[2][0]) / s
-        y = (m[1][2] + m[2][1]) / s
-        z = s / 4
+        w, x, y, z = (m[1][0] - m[0][1]) / s, (m[0][2] + m[2][0]) / s, (m[1][2] + m[2][1]) / s, s / 4
     return dict(X=x, Y=y, Z=z, W=w)
 
 
 def decal_rot(normal_yaw):
-    """Rotation of a wall decal on a facade whose OUTWARD normal has world yaw `normal_yaw` (radians).
-
-    Editor decal basis (measured on Workshop maps, matches Unreal's deferred-decal shader: texture U along local Z,
-    V along local Y, projection along +X): X points into the surface (opposite the outward normal), Y straight
-    down, Z = X x Y runs along the wall. With this basis the PNG reads upright from outside the building.
-    """
+    """Wall-decal basis: X into the surface, Y world-down, Z = X x Y (verified against editor-placed decals)."""
     c, s = math.cos(normal_yaw), math.sin(normal_yaw)
     return quat_from_axes((-c, -s, 0.0), (0.0, 0.0, -1.0), (s, -c, 0.0))
 
 
 def tf(x, y, z, rot, s=(1, 1, 1)):
-    """Map-file transform: position in METRES -> Unreal cm (2 dp), quaternion `rot`, Scale3D `s` (4 dp)."""
+    """Map-JSON transform: metres -> Unreal centimetres."""
     return dict(
         Rotation=rot,
         Translation=dict(X=round(x * 100, 2), Y=round(y * 100, 2), Z=round(z * 100, 2)),
@@ -222,12 +173,11 @@ def tf(x, y, z, rot, s=(1, 1, 1)):
 
 
 def add(row, x, y, z, sx=1.0, sy=1.0, sz=1.0, yaw=0.0, rot=None, store=None):
-    """Append one instance of asset `row` at the PIVOT position (x, y, z) metres, scale (sx, sy, sz).
-
-    `yaw` (radians) builds a plain Z rotation unless a full quaternion `rot` is given. Instances outside +-BOARD are
-    silently dropped. `store` redirects the transform to another dict (the decal rows); default: `instances`.
-    """
-    if abs(x) > BOARD or abs(y) > BOARD:
+    """Place a row at pivot (x, y, z) m; anything off the landscape is dropped silently. The grassy landscape is
+    not centred on the origin: it spans -1209..+806 m on both axes (measured from its heightmap), so the check is
+    the sampler itself, not a symmetric board size."""
+    if abs(x) > BOARD or abs(y) > BOARD or gz(x, y) is None:
+        st('dropped_off_landscape')
         return
     (store if store is not None else instances).setdefault(row, []).append(
         tf(x, y, z, rot if rot else quat_yaw(yaw), (sx, sy, sz))
@@ -235,12 +185,7 @@ def add(row, x, y, z, sx=1.0, sy=1.0, sz=1.0, yaw=0.0, rot=None, store=None):
 
 
 def box(kind, cx, cy, z0, h, lx, ly, yaw=0.0):
-    """Solid block lx (along yaw) x ly x h metres whose BOTTOM is at z0, from one scaled mesh.
-
-    `kind`: 'concrete' = SM_ConcreteFloor01 (4x4x0.30 m, pivot at the top, mesh spans z -0.29..+0.01), so the pivot
-    goes 0.29 * sz above z0; 'brick' = SM_ConcreteWall01 (0.3x4x4 m, base pivot) placed at z0; anything else is a
-    CUBE colour (1 m, centre pivot) placed at z0 + h/2. Sizes are clamped to >= 0.1 m / 0.01 m so no scale is zero.
-    """
+    """Axis box from z0 up by h: 'concrete' (SM_ConcreteFloor01, pivot at the TOP), 'brick' (base pivot), or a cube colour."""
     lx, ly, h = max(lx, 0.1), max(ly, 0.1), max(h, 0.01)
     if kind == 'concrete':
         sz = h / 0.30
@@ -252,85 +197,63 @@ def box(kind, cx, cy, z0, h, lx, ly, yaw=0.0):
 
 
 def cylinder(kind, cx, cy, z0, h, d):
-    """Upright cylinder of diameter d and height h (m) standing on z0 (SM_Cylinder is 1 m, centre pivot)."""
+    """Cylinder of diameter d from z0 up by h (centre pivot)."""
     add(CYL[kind], cx, cy, z0 + h / 2, d, d, h)
 
 
 def plane(row, x, y, z_top, lx, ly, yaw=0.0):
-    """Textured ground plane (4x4x0.1 m mesh, centre pivot) scaled to lx x ly with its TOP at z_top; min 0.5 m."""
+    """A 4 x 4 x 0.1 m ground plane scaled to lx x ly with its top at z_top."""
     add(row, x, y, z_top - 0.05, max(lx, 0.5) / 4, max(ly, 0.5) / 4, 1.0, yaw)
     st('planes')
 
 
-def pitched(kind, x0, y0, z0, x1, y1, z1, width, thick=0.4):
-    """Sloping slab (cube colour `kind`) from (x0, y0, z0) to (x1, y1, z1), `width` m across, `thick` m thick.
-
-    Yaw follows the plan direction, pitch the rise over the plan length; the centre is dropped by thick/2 so the
-    top surface runs roughly through the two end points. Ramps up to bridge decks and the Bethesda stairs.
-    """
-    L = math.hypot(x1 - x0, y1 - y0)
-    yaw = math.degrees(math.atan2(y1 - y0, x1 - x0))
-    pitch = math.degrees(math.atan2(z1 - z0, L))
-    add(
-        CUBE[kind],
-        (x0 + x1) / 2,
-        (y0 + y1) / 2,
-        (z0 + z1) / 2 - thick / 2,
-        math.hypot(L, z1 - z0),
-        width,
-        thick,
-        rot=quat_pitch_yaw(pitch, yaw),
-    )
-
-
 def put(row, x, y, dz=0.0, s=1.0, yaw=0.0):
-    """Prop on the ground: uniform scale `s`, base at Z0 + dz (m) with the catalog rest() correction scaled by s."""
-    add(row, x, y, Z0 + dz + rest(row) * s, s, s, s, yaw)
+    """Place a row on the terrain at its own position, lifted by dz and the catalogue rest correction."""
+    h = gz(x, y)
+    if h is None:
+        return
+    add(row, x, y, h + dz + rest(row) * s, s, s, s, yaw)
 
 
 def ll(lat, lon):
-    """WGS84 degrees -> local metres through the map frame (for hand-placed landmarks)."""
+    """WGS84 -> local metres."""
     return FR.xy(lat, lon)
 
 
-# ---- the park polygon and an occupancy grid (4 m) -----------------------------------
-# PARK: the largest polygon tagged leisure=park with the name Central Park (OSM holds a few smaller ones), as a list
-# of (x, y) metres. Its minimum-area rectangle gives the park grid yaw `pth` used to align lawn base, ball fields
-# and Tavern on the Green.
+kit = MapKit(add, box, plane, ground_z=ground, rng=rng, stats=stats)
+
+# ---- the park polygon and an occupancy grid ---------------------------------------------------------------
 PARK = max(
     (p for p in F['polys'] if p['kind'] == 'park' and p['tags'].get('name') == 'Central Park'),
     key=lambda p: poly_area(p['pts']),
 )['pts']
 pcx, pcy, plx, ply, pth = min_rect(PARK)
-print(f'park rectangle {plx:.0f} x {ply:.0f} m, yaw {math.degrees(pth):.1f} deg, centre ({pcx:.0f},{pcy:.0f})')
 CELL = 4.0
-GX0, GY0 = -800, -3800  # grid origin (m): covers x -800..800, y -3800..700, i.e. the park plus a margin
-GNX, GNY = int(1600 / CELL), int(4500 / CELL)
-occ = bytearray(
-    GNX * GNY
-)  # 0 free, 1 path, 2 water, 3 hard (plaza/building/rock), 4 lawn (keep clear of trees), 5 wood
+GX0, GY0 = -1300, -1500
+GNX, GNY = int(2600 / CELL), int(3000 / CELL)
+occ = bytearray(GNX * GNY)
 
 
 def cell(x, y):
-    """(x, y) metres -> (i, j) grid indices (may be out of range; callers check)."""
+    """Grid cell of a point."""
     return (int((x - GX0) // CELL), int((y - GY0) // CELL))
 
 
 def mark(x, y, v):
-    """Set the occupancy value `v` of the cell containing (x, y); points outside the grid are ignored."""
+    """Set the occupancy of the cell under (x, y)."""
     i, j = cell(x, y)
     if 0 <= i < GNX and 0 <= j < GNY:
         occ[j * GNX + i] = v
 
 
 def occ_at(x, y):
-    """Occupancy value at (x, y); outside the grid everything counts as 3 (hard) so nothing gets planted there."""
+    """Occupancy of the cell under (x, y); off-grid counts as hard."""
     i, j = cell(x, y)
     return occ[j * GNX + i] if 0 <= i < GNX and 0 <= j < GNY else 3
 
 
 def mark_poly(pts, v, holes=()):
-    """Stamp `v` into every cell whose centre is inside the polygon `pts` and in none of the `holes` rings."""
+    """Mark every cell inside a polygon (minus holes)."""
     xs = [p[0] for p in pts]
     ys = [p[1] for p in pts]
     for j in range(int((min(ys) - GY0) // CELL), int((max(ys) - GY0) // CELL) + 1):
@@ -341,16 +264,12 @@ def mark_poly(pts, v, holes=()):
 
 
 def in_park(x, y):
-    """True when (x, y) lies inside the Central Park outline polygon."""
+    """True inside the Central Park polygon."""
     return point_in_poly(x, y, PARK)
 
 
 def mark_line(pts, w, v):
-    """Stamp `v` along a polyline of width `w` m: samples every ~2 m, a 3x3 stamp at 0 and +-w/2 on both axes.
-
-    The stamp is axis-aligned, not rotated with the line, so it over-marks diagonals slightly (good enough to keep
-    trees off the paths).
-    """
+    """Mark the cells along a polyline of width w."""
     for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
         L = math.hypot(x1 - x0, y1 - y0)
         n = max(1, int(L / 2))
@@ -362,148 +281,24 @@ def mark_line(pts, w, v):
                     mark(x + dx, y + dy, v)
 
 
-# ---- 1. ground: city slab, park lawn base --------------------------------------------
-# One 5.8 km concrete slab (top at Z0) centred on the park's middle (y -1200), then a thin green cube over the
-# park's bounding rectangle (top at Z0 + 0.04) as the lawn base; the real lawns are only marked, not tiled.
-box('concrete', 0, -1200, Z0 - 0.30, 0.30, 2 * BOARD, 2 * BOARD)
-box('green', pcx, pcy, Z0 - 0.02, 0.06, plx, ply, pth)
-st('park_base')
+def along_line(pts, step, start=0.0):
+    """Yield (x, y, yaw, distance) every `step` metres along a polyline."""
+    acc, nxt = 0.0, start
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        L = math.hypot(x1 - x0, y1 - y0)
+        if L < 1e-6:
+            continue
+        yaw = math.atan2(y1 - y0, x1 - x0)
+        while nxt <= acc + L:
+            t = (nxt - acc) / L
+            yield x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, yaw, nxt
+            nxt += step
+        acc += L
 
 
-# ---- 2. surfaces from OSM polygons ---------------------------------------------------
 def fill_rects(pts, max_rects=12):
-    """Rectangles covering a polygon: geom.decompose for anything over 30 m^2, a single min_rect for small ones."""
+    """Rectangles covering a polygon (one for tiny ones)."""
     return decompose(pts, max_rects) if poly_area(pts) > 30 else [min_rect(pts)]
-
-
-# Each polygon kind becomes a surface and stamps the occupancy grid. Heights above Z0: water surface +0.03, plazas
-# +0.03, so they sit above the lawn base (+0.04 top) without fighting the paths (+0.04 / +0.05, section 3).
-water_tiles = 0
-for p in F['polys']:
-    k, pts, tags = p['kind'], p['pts'], p['tags']
-    cx, cy = centroid(pts)
-    a = poly_area(pts)
-    if abs(cx) > BOARD or abs(cy) > BOARD:
-        continue
-    inside = in_park(cx, cy)
-    if k == 'water' and a > 40:
-        # BP_meWater is a 4 m tile with the pivot at the surface; big water is tiled with the tile scaled 2x, 4x or
-        # 6x (8 / 16 / 24 m) to keep the instance count down. cy > -1300 picks the southern half of the park.
-        tile = (
-            4.0 if (inside and cy > -1300 and a < 3e4) else (8.0 if a < 20e4 else 16.0)
-        )  # 4 m tiles only on the small ponds; the Lake and Reservoir use 8 / 16 m
-        if not inside and a > 50e4:
-            tile = 24.0  # the rivers
-        xs = [q[0] for q in pts]
-        ys = [q[1] for q in pts]
-        # tile centres on a world-aligned lattice of pitch `tile`, kept only inside the ring and outside its islands;
-        # Z scale 1.2 deepens the 2.1 m volume a little (empirical)
-        for j in range(int(min(ys) // tile), int(max(ys) // tile) + 1):
-            for i in range(int(min(xs) // tile), int(max(xs) // tile) + 1):
-                x, y = (i + 0.5) * tile, (j + 0.5) * tile
-                if point_in_poly(x, y, pts) and not any(point_in_poly(x, y, h) for h in p['holes']):
-                    add(WATER, x, y, Z0 + 0.03, tile / 4, tile / 4, 1.2)
-                    water_tiles += 1
-        mark_poly(pts, 2, p['holes'])
-        if inside and a > 3e4 and tags.get('name') == 'The Lake':
-            # rowing boats: 16 tries, kept only > 12 m from the shore (every third outline vertex is checked)
-            for _ in range(16):
-                x, y = rng.uniform(min(xs), max(xs)), rng.uniform(min(ys), max(ys))
-                if point_in_poly(x, y, pts) and all(math.hypot(x - q[0], y - q[1]) > 12 for q in pts[::3]):
-                    put(BOAT, x, y, 0.05, 1.0, rng.uniform(0, 6.28))
-                    st('boats')
-        if tags.get('name') == 'Conservatory Water':
-            # the model-boat pond: the same boat mesh at 0.3 scale
-            for _ in range(8):
-                x, y = rng.uniform(cx - 25, cx + 25), rng.uniform(cy - 25, cy + 25)
-                put(BOAT, x, y, 0.04, 0.3, rng.uniform(0, 6.28)) if point_in_poly(x, y, pts) else None
-        if tags.get('name') in ('Jacqueline Kennedy Onassis Reservoir',):  # the iron fence and the running track
-            # one 4 m fence piece per 4 m of shoreline, lowered to 0.8 scale in Z
-            for (x0, y0), (x1, y1) in zip(pts, pts[1:] + pts[:1]):
-                L = math.hypot(x1 - x0, y1 - y0)
-                n = max(1, int(L // 4))
-                yaw = math.atan2(y1 - y0, x1 - x0)
-                for q in range(n):
-                    t = (q + 0.5) / n
-                    add(FENCE, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, Z0, 1, 1, 0.8, yaw)
-                    st('fences')
-    elif k in ('plaza', 'parking', 'rink') and inside and a > 20:
-        # paved areas: up to 20 rectangles of ground plane each; the rink gets a 1 m rink wall and 30 skaters
-        row = ASPHALT if k == 'parking' else (PAVE2 if k == 'rink' else PAVE)
-        for rx, ry, lx, ly, th in fill_rects(pts, 20):
-            plane(row, rx, ry, Z0 + 0.03, lx, ly, th)
-        mark_poly(pts, 3)
-        if k == 'rink':
-            for (x0, y0), (x1, y1) in zip(pts, pts[1:] + pts[:1]):
-                box(
-                    'default',
-                    (x0 + x1) / 2,
-                    (y0 + y1) / 2,
-                    Z0,
-                    1.0,
-                    math.hypot(x1 - x0, y1 - y0),
-                    0.15,
-                    math.atan2(y1 - y0, x1 - x0),
-                )
-            for _ in range(30):
-                x, y = rng.uniform(cx - 30, cx + 30), rng.uniform(cy - 30, cy + 30)
-                if point_in_poly(x, y, pts):
-                    put(rng.choice(PEOPLE), x, y, 0.03, 1.0, rng.uniform(0, 6.28))
-                    st('skaters')
-    elif k == 'grass' and inside:
-        # lawns are the green base already; only marked (4) so the random trees stay off them
-        mark_poly(pts, 4)
-        if 'Ball Field' in (tags.get('name') or '') or tags.get('sport') == 'baseball':
-            # a 26 m dirt diamond turned 45 deg to the park grid, with a short backstop of 5 tall fence pieces
-            plane(DIRT, cx, cy, Z0 + 0.03, 26, 26, pth + math.pi / 4)
-            st('ballfields')
-            for q in range(5):
-                add(FENCE, *l2w(cx, cy, pth + math.pi / 4, -13 + 1 * q, -12), Z0, 1, 1, 1.4, pth + math.pi / 4)
-    elif k == 'wood' and inside:
-        mark_poly(pts, 5)
-    elif k == 'rock' and inside and a > 40:
-        # outcrops: grey slabs 0.5..2.5 m high over 90 % of each covering rectangle, plus one rock mesh per 150 m^2
-        # (at least 2) at 1.2-2.6x, raised 0.3 m so they sit on the slab rather than in it (empirical)
-        mark_poly(pts, 3)
-        for rx, ry, lx, ly, th in fill_rects(pts, 6):
-            h = min(2.5, 0.5 + math.sqrt(lx * ly) / 12)
-            box('grey', rx, ry, Z0, h, lx * 0.9, ly * 0.9, th)
-        for _ in range(max(2, int(a // 150))):
-            x, y = rng.uniform(cx - 15, cx + 15), rng.uniform(cy - 15, cy + 15)
-            if point_in_poly(x, y, pts):
-                s = rng.uniform(1.2, 2.6)
-                put(rng.choice(ROCKS + [CLIFF]), x, y, 0.3, s, rng.uniform(0, 6.28))
-                st('rocks')
-    elif k == 'fountain' and inside and a > 20:
-        # basin: a 0.7 m cylinder with the polygon's equivalent diameter, a 2.5 m jet column, 4 m water tiles
-        # inside the outline at +0.6 (just under the rim)
-        cylinder('grey', cx, cy, Z0, 0.7, 2 * math.sqrt(a / math.pi))
-        cylinder('grey', cx, cy, Z0, 2.5, 1.6)
-        for j in range(-3, 4):
-            for i in range(-3, 4):
-                if point_in_poly(cx + i * 4, cy + j * 4, pts):
-                    add(WATER, cx + i * 4, cy + j * 4, Z0 + 0.6, 1, 1, 1)
-        mark_poly(pts, 3)
-        st('fountains')
-print('water tiles', water_tiles)
-
-# ---- 3. paths, drives, transverses, bridges ------------------------------------------
-# default widths (m) per OSM highway kind when the way has no usable width tag (typical values, empirical)
-PATH_W = dict(
-    footway=3.6,
-    path=3.0,
-    pedestrian=7.0,
-    bridleway=4.0,
-    cycleway=4.0,
-    steps=3.0,
-    service=8.0,
-    residential=11.0,
-    tertiary=12.0,
-    secondary=14.0,
-    primary=18.0,
-    unclassified=10.0,
-    living_street=8.0,
-)
 
 
 def parse_width(v):
@@ -522,118 +317,327 @@ def parse_width(v):
         return 0.0
 
 
+def water_level(pts):
+    """One level per water body: the highest ground under it plus 5 cm, so the sheet never sinks below the grass."""
+    xs = [q[0] for q in pts]
+    ys = [q[1] for q in pts]
+    hs = [
+        gz(x, y)
+        for x in range(int(min(xs)), int(max(xs)) + 1, 12)
+        for y in range(int(min(ys)), int(max(ys)) + 1, 12)
+        if point_in_poly(x, y, pts)
+    ]
+    hs = [h for h in hs if h is not None]
+    return (max(hs) if hs else G0) + 0.05
+
+
+# ---- 1. water and surfaces from OSM polygons -------------------------------------------------------------
+water_tiles = 0
+for p in F['polys']:
+    k, pts, tags = p['kind'], p['pts'], p['tags']
+    cx, cy = centroid(pts)
+    a = poly_area(pts)
+    if abs(cx) > BOARD or abs(cy) > BOARD:
+        continue
+    inside = in_park(cx, cy)
+    if k == 'water' and a > 40:
+        tile = 4.0 if (inside and a < 3e4) else (8.0 if a < 20e4 else 16.0)
+        lvl = water_level(pts)
+        xs = [q[0] for q in pts]
+        ys = [q[1] for q in pts]
+        for j in range(int(min(ys) // tile), int(max(ys) // tile) + 1):
+            for i in range(int(min(xs) // tile), int(max(xs) // tile) + 1):
+                x, y = (i + 0.5) * tile, (j + 0.5) * tile
+                if point_in_poly(x, y, pts) and not any(point_in_poly(x, y, h) for h in p['holes']):
+                    add(WATER, x, y, lvl, tile / 4, tile / 4, 1.2)
+                    water_tiles += 1
+        mark_poly(pts, 2, p['holes'])
+        if inside:  # a rocky bank hides the water sheet's edge where the ground dips below it
+            for x, y, yaw, dist in along_line(pts + pts[:1], 7.0):
+                put(rng.choice(ROCKS), *l2w(x, y, yaw, 0, 1.2), 0.0, rng.uniform(0.7, 1.3), rng.uniform(0, 6.28))
+                st('bank_rocks')
+        if tags.get('name') == 'The Lake':
+            n = 0
+            for _ in range(800):
+                if n >= 24:
+                    break
+                x, y = rng.uniform(min(xs), max(xs)), rng.uniform(min(ys), max(ys))
+                if (
+                    point_in_poly(x, y, pts)
+                    and not any(point_in_poly(x, y, h) for h in p['holes'])
+                    and all(math.hypot(x - q[0], y - q[1]) > 10 for q in pts[::2])
+                ):
+                    add(BOAT, x, y, lvl + rest(BOAT), 1, 1, 1, rng.uniform(0, 6.28))
+                    n += 1
+                    st('boats')
+        if tags.get('name') == 'Conservatory Water':
+            for _ in range(10):
+                x, y = rng.uniform(cx - 25, cx + 25), rng.uniform(cy - 25, cy + 25)
+                if point_in_poly(x, y, pts):
+                    add(BOAT, x, y, lvl, 0.3, 0.3, 0.3, rng.uniform(0, 6.28))
+    elif k in ('plaza', 'parking', 'rink') and inside and a > 20:
+        mat = 'asphalt' if k == 'parking' else ('pavement2' if k == 'rink' else 'flagstone')
+        for q, (rx, ry, lx, ly, th) in enumerate(fill_rects(pts, 20)):
+            kit.surface(mat, rx, ry, lx, ly, th, q)
+        mark_poly(pts, 3)
+        if k == 'rink':
+            kit.wall(pts + pts[:1], 'parapet', 1.0)
+            for _ in range(30):
+                x, y = rng.uniform(cx - 30, cx + 30), rng.uniform(cy - 30, cy + 30)
+                if point_in_poly(x, y, pts):
+                    put(rng.choice(PEOPLE), x, y, LAYER['pavement2'], 1.0, rng.uniform(0, 6.28))
+                    st('skaters')
+    elif k == 'grass' and inside:
+        mark_poly(pts, 4)
+        if tags.get('sport') == 'tennis':
+            rx, ry, lx, ly, th = min_rect(pts)
+            kit.surface('pavement2', rx, ry, lx, ly, th)
+            kit.wall(pts + pts[:1], 'tall_fence')
+            short = min(lx, ly)
+            tth = th if lx >= ly else th + math.pi / 2
+            zc = ground(rx, ry) + LAYER['pavement2']
+            for q in range(max(1, int(short // 18))):
+                v = -short / 2 + 9 + q * 18
+                for dv in (-5.5, 0.0, 5.5):
+                    box('default', *l2w(rx, ry, tth, 0, v + dv), zc, 0.02, 23.8, 0.12, tth)
+                for du in (-11.9, 11.9):
+                    box('default', *l2w(rx, ry, tth, du, v), zc, 0.02, 0.12, 11.0, tth)
+                nx_, ny_ = l2w(rx, ry, tth, 0, v)
+                add(PARK_FENCE, nx_, ny_, zc, 1, 2.9, 0.4, tth + math.pi / 2)
+            mark_poly(pts, 3)
+            st('tennis_courts')
+        elif 'Ball Field' in (tags.get('name') or '') or tags.get('sport') == 'baseball':
+            kit.surface('dirt', cx, cy, 26, 26, pth + math.pi / 4)
+            kit.wall([l2w(cx, cy, pth + math.pi / 4, -8, -13), l2w(cx, cy, pth + math.pi / 4, 8, -13)], 'tall_fence')
+            st('ballfields')
+    elif k == 'wood' and inside:
+        mark_poly(pts, 5)
+    elif k == 'rock' and inside and a > 40:
+        mark_poly(pts, 3)
+        for rx, ry, lx, ly, th in fill_rects(pts, 6):
+            h = min(2.5, 0.5 + math.sqrt(lx * ly) / 12)
+            box('grey', rx, ry, ground(rx, ry) - 0.3, h + 0.3, lx * 0.9, ly * 0.9, th)
+        for _ in range(max(2, int(a // 150))):
+            x, y = rng.uniform(cx - 15, cx + 15), rng.uniform(cy - 15, cy + 15)
+            if point_in_poly(x, y, pts):
+                s = rng.uniform(1.2, 2.6)
+                put(rng.choice(ROCKS + [CLIFF]), x, y, 0.3, s, rng.uniform(0, 6.28))
+                st('rocks')
+    elif k == 'fountain' and inside and a > 20:
+        g = ground(cx, cy)
+        cylinder('grey', cx, cy, g - 0.2, 0.9, 2 * math.sqrt(a / math.pi))
+        cylinder('grey', cx, cy, g, 2.5, 1.6)
+        for j in range(-3, 4):
+            for i in range(-3, 4):
+                if point_in_poly(cx + i * 4, cy + j * 4, pts):
+                    add(WATER, cx + i * 4, cy + j * 4, g + 0.6, 1, 1, 1)
+        mark_poly(pts, 3)
+        st('fountains')
+print('water tiles', water_tiles)
+
+# ---- 2. paths, drives, transverse trenches, arches ---------------------------------------------------------
+PATH_W = dict(
+    footway=3.6,
+    path=3.0,
+    pedestrian=7.0,
+    bridleway=4.0,
+    cycleway=4.0,
+    steps=3.0,
+    service=8.0,
+    residential=11.0,
+    tertiary=12.0,
+    secondary=14.0,
+    primary=18.0,
+    unclassified=10.0,
+    living_street=8.0,
+)
+
+
 def is_drive(l):
-    """True for the park drives: any way named '... Drive', or a service road whose first point is in the park."""
-    return (l['tags'].get('name') or '').endswith('Drive') or l['kind'] == 'service' and in_park(*l['pts'][0])
+    """Park drives: named '... Drive' or service roads inside the park."""
+    return (l['tags'].get('name') or '').endswith('Drive') or (l['kind'] == 'service' and in_park(*l['pts'][0]))
 
 
 def is_transverse(l):
-    """True for the sunken transverse roads (named '... Transverse', mapped as tertiary/secondary/residential)."""
+    """The sunken crosstown transverse roads."""
     return 'Transverse' in (l['tags'].get('name') or '') and l['kind'] in ('tertiary', 'secondary', 'residential')
 
 
-# Every highway way becomes a run of ground planes along its real geometry. Outside the park only roads are built
-# (no city footpaths, no tunnels); inside, bridge=yes segments become raised grey decks you can fly under.
-# path_lines keeps (pts, width, row, inside, kind, name, bridge) for the furniture pass in section 8.
-path_lines = []
+path_lines = []  # (pts, width, material, inside, kind, name, bridge)
 for l in F['lines']:
-    k = l['kind']
-    pts = l['pts']
+    k, pts = l['kind'], l['pts']
     if k not in PATH_W or len(pts) < 2:
         continue
-    inside = in_park(*pts[len(pts) // 2])
+    mid = pts[len(pts) // 2]
+    if abs(mid[0]) > BOARD + 100 or abs(mid[1]) > BOARD + 100:
+        continue
+    inside = in_park(*mid)
     if not inside and k in ('footway', 'path', 'steps', 'pedestrian', 'bridleway', 'cycleway'):
         continue
     if l['tags'].get('tunnel') == 'yes' and not inside:
         continue
     w = parse_width(l['tags'].get('width')) or PATH_W[k]
-    # surface by role: drives and transverses are 12 m asphalt, foot paths pavement, the bridle path dirt
     if is_drive(l):
-        w = max(w, 12.0)
-        row = ASPHALT
+        w, mat = max(w, 12.0), 'asphalt'
     elif is_transverse(l):
-        w = 12.0
-        row = ASPHALT
+        w, mat = 12.0, 'asphalt'
     elif k in ('footway', 'path', 'steps', 'pedestrian'):
-        row = PAVE if inside else PAVE
+        mat = 'pavement' if k != 'pedestrian' else 'flagstone'
     elif k == 'bridleway':
-        row = DIRT
-    elif k == 'cycleway':
-        row = ASPHALT
+        mat = 'dirt'
     else:
-        row = ASPHALT
+        mat = 'asphalt'
     bridge = l['tags'].get('bridge') == 'yes'
-    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
-        L = math.hypot(x1 - x0, y1 - y0)
-        if L < 0.5:
-            continue
-        # pieces of <= 22 m so the 4 m plane is never stretched too far; +0.6 m overlap hides the seams.
-        # Asphalt sits at +0.04 and pavement at +0.05 so paths crossing drives do not z-fight.
-        n = max(1, int(math.ceil(L / 22)))
-        yaw = math.atan2(y1 - y0, x1 - x0)
-        for q in range(n):
-            t0, t1 = q / n, (q + 1) / n
-            mx, my = x0 + (x1 - x0) * (t0 + t1) / 2, y0 + (y1 - y0) * (t0 + t1) / 2
-            if bridge and inside:
-                # deck bottom 2.6 m up, 0.4 m thick: a flyable gap under every mapped footbridge
-                box('grey', mx, my, Z0 + 2.6, 0.4, L / n + 0.5, w, yaw)
-                st('bridge_decks')
-            else:
-                plane(row, mx, my, Z0 + (0.04 if row == ASPHALT else 0.05), L / n + 0.6, w, yaw)
+    if not bridge:  # bridges are built as arches below, with their own deck
+        kit.ribbon(pts, w, mat)
     mark_line(pts, w, 1)
-    path_lines.append((pts, w, row, inside, k, l['tags'].get('name') or '', bridge))
+    path_lines.append((pts, w, mat, inside, k, l['tags'].get('name') or '', bridge))
     if not inside and k in ('residential', 'tertiary', 'secondary', 'primary') and not LITE:
-        # city streets: 4 m sidewalks on both sides (centred 2.2 m beyond the kerb, +0.06 so they ride above the
-        # road) and a yellow centre line on wide (>= 11 m) streets, stopped 3 m short of each end
         for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
             L = math.hypot(x1 - x0, y1 - y0)
             yaw = math.atan2(y1 - y0, x1 - x0)
             if L < 6:
                 continue
             for side in (-1, 1):
-                plane(PAVE, *l2w((x0 + x1) / 2, (y0 + y1) / 2, yaw, 0, side * (w / 2 + 2.2)), Z0 + 0.06, L, 4.0, yaw)
+                sx_, sy_ = l2w((x0 + x1) / 2, (y0 + y1) / 2, yaw, 0, side * (w / 2 + 2.2))
+                kit.surface('pavement2', sx_, sy_, L + 0.3, 4.0, yaw)
             if L > 20 and w >= 11:
-                box('yellow', (x0 + x1) / 2, (y0 + y1) / 2, Z0 + 0.05, 0.01, L - 6, 0.3, yaw)
+                box(
+                    'yellow',
+                    (x0 + x1) / 2,
+                    (y0 + y1) / 2,
+                    ground((x0 + x1) / 2, (y0 + y1) / 2) + LAYER['asphalt'] + 0.01,
+                    0.01,
+                    L - 6,
+                    0.3,
+                    yaw,
+                )
 st('path_lines', len(path_lines))
-# arches and bridges with a mapped outline (man_made=bridge): raised deck, stone abutments, handrails -> a fly-through
-# The outline's minimum rectangle gives the deck: L along the carried path, W across. The opening height H is 3.2 m
-# for narrow arches, 4 m for wide ones (empirical). The abutments close the two ENDS of the deck, so the passage
-# underneath runs across the deck (the way the crossed path really goes); ramps 12 m long lead up to each end.
+
+# transverse roads: walled trenches (the terrain cannot be dug), so path crossings over them become real overpasses
+TRANSVERSE = [pl for pl in path_lines if 'Transverse' in pl[5] and pl[2] == 'asphalt' and pl[1] >= 11]
+
+
+def near_transverse(x, y, d=10.0):
+    """True within d metres of a transverse road centreline."""
+    for pts, w, mat, inside, k, nm, bridge in TRANSVERSE:
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            dx, dy = x1 - x0, y1 - y0
+            d2 = dx * dx + dy * dy
+            if d2 < 1e-6:
+                continue
+            t = max(0, min(1, ((x - x0) * dx + (y - y0) * dy) / d2))
+            if math.hypot(x - (x0 + t * dx), y - (y0 + t * dy)) < d:
+                return True
+    return False
+
+
+for pts, w, mat, inside, k, nm, bridge in TRANSVERSE:
+    for sgn in (-1, 1):
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            yaw = math.atan2(y1 - y0, x1 - x0)
+            if in_park((x0 + x1) / 2, (y0 + y1) / 2):
+                kit.wall(
+                    [l2w(x0, y0, yaw, 0, sgn * (w / 2 + 0.8)), l2w(x1, y1, yaw, 0, sgn * (w / 2 + 0.8))],
+                    'retaining',
+                    3.6,
+                )
+                st('transverse_walls')
+    for x, y, yaw, dist in along_line(pts, 45):
+        if in_park(x, y):
+            put(
+                rng.choice(CARS),
+                *l2w(x, y, yaw, 0, rng.choice([-3.0, 3.0])),
+                LAYER['asphalt'],
+                1.0,
+                yaw + (0 if rng.random() < 0.5 else math.pi),
+            )
+            st('cars')
+
+# arches: every bridge with a mapped outline, then every bridge-tagged path segment without one
+arch_centres = []
 for l in F['lines']:
     if l['kind'] != 'bridge' or len(l['pts']) < 4 or not in_park(*l['pts'][0]):
         continue
     cx, cy, lx, ly, th = min_rect(l['pts'])
     L, W = (lx, ly) if lx >= ly else (ly, lx)
     th = th if lx >= ly else th + math.pi / 2
-    H = 3.2 if W < 8 else 4.0
-    name = l['tags'].get('name') or ''
-    box('concrete', cx, cy, Z0 + H, 0.5, L, W, th)  # deck: bottom at H, 0.5 m thick
+    nm = l['tags'].get('name') or ''
+    kit.bridge(
+        cx, cy, L, W, th, 4.8 if near_transverse(cx, cy) else 3.4, deck='wood' if 'Bow' in nm else 'flagstone', name=nm
+    )
+    arch_centres.append((cx, cy))
+for l in F['lines']:
+    if l['tags'].get('bridge') != 'yes' or l['kind'] not in (
+        'footway',
+        'path',
+        'bridleway',
+        'cycleway',
+        'pedestrian',
+        'steps',
+    ):
+        continue
+    pts = l['pts']
+    if len(pts) < 2 or not in_park(*pts[len(pts) // 2]):
+        continue
+    (x0, y0), (x1, y1) = pts[0], pts[-1]
+    L = math.hypot(x1 - x0, y1 - y0)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    if L < 6 or any(math.hypot(cx - ox, cy - oy) < 14 for (ox, oy) in arch_centres):
+        continue
+    W = (parse_width(l['tags'].get('width')) or PATH_W.get(l['kind'], 3.6)) + 1.0
+    kit.bridge(
+        cx,
+        cy,
+        L + 2.0,
+        W,
+        math.atan2(y1 - y0, x1 - x0),
+        4.8 if near_transverse(cx, cy) else 3.2,
+        name=l['tags'].get('name') or '',
+    )
+    arch_centres.append((cx, cy))
+# streams (the Gill, the Loch): a ribbon of water tiles with rocks along the banks
+for l in F['lines']:
+    if l['kind'] not in ('stream', 'river', 'canal', 'drain', 'ditch') or not in_park(*l['pts'][0]):
+        continue
+    for x, y, yaw, dist in along_line(l['pts'], 3.0):
+        add(WATER, x, y, ground(x, y) + 0.02, 1.0, 1.0, 1.0, yaw)
+        mark(x, y, 2)
+        if int(dist) % 9 == 0:
+            for sgn in (-1, 1):
+                put(rng.choice(ROCKS), *l2w(x, y, yaw, 0, sgn * 2.6), 0.0, rng.uniform(0.8, 1.6), rng.uniform(0, 6.28))
+        st('stream_tiles')
+# mapped fences, walls, retaining walls and hedges
+for l in F['lines']:
+    k = l['kind']
+    if k not in ('fence', 'wall', 'retaining_wall', 'hedge', 'city_wall') or not in_park(*l['pts'][0]):
+        continue
+    if k == 'fence':
+        kit.wall(l['pts'], 'fence', 1.5)
+    elif k == 'hedge':
+        for x, y, yaw, dist in along_line(l['pts'], 2.0):
+            put(rng.choice(BUSHES), x, y, 0, rng.uniform(0.9, 1.2), rng.uniform(0, 6.28))
+        st('hedges')
+    elif k == 'retaining_wall':
+        kit.wall(l['pts'], 'retaining', 1.8)
+    else:
+        kit.wall(l['pts'], 'brick', 2.0)
+# steps: stone parapets both sides so a flight of steps reads as one on the near-flat terrain
+for l in F['lines']:
+    if l['kind'] != 'steps' or not in_park(*l['pts'][0]):
+        continue
+    w = parse_width(l['tags'].get('width')) or 3.0
     for sgn in (-1, 1):
-        ax, ay = l2w(cx, cy, th, sgn * (L / 2 - 1.0), 0)
-        box('brick', ax, ay, Z0, H, 2.0, W, th)  # abutments: the arch opening is between them
-        for q in range(int(L // 2)):
-            add(HANDRAIL, *l2w(cx, cy, th, -L / 2 + 1 + q * 2, sgn * (W / 2 - 0.3)), Z0 + H + 0.5, 1, 1, 1, th)
-        rx, ry = l2w(cx, cy, th, sgn * (L / 2 + 6), 0)
-        pitched(
-            'grey',
-            *l2w(cx, cy, th, sgn * (L / 2 + 12), 0),
-            Z0 + 0.05,
-            *l2w(cx, cy, th, sgn * L / 2, 0),
-            Z0 + H + 0.5,
-            W,
-        )
-    if 'Bow' in name:  # Bow Bridge: a shallow cast-iron arch, 26 m, rises 2.5 m over the water
-        # solid 1 m parapets along both long edges instead of the open handrails
-        for sgn in (-1, 1):
-            box('default', *l2w(cx, cy, th, 0, sgn * (W / 2 - 0.2)), Z0 + H + 0.5, 1.0, L, 0.2, th)
-    st('arches')
+        side = []
+        for (x0, y0), (x1, y1) in zip(l['pts'], l['pts'][1:]):
+            yaw = math.atan2(y1 - y0, x1 - x0)
+            side += [l2w(x0, y0, yaw, 0, sgn * (w / 2 + 0.2)), l2w(x1, y1, yaw, 0, sgn * (w / 2 + 0.2))]
+        kit.wall(side, 'parapet')
+    st('step_rails')
 
-# ---- 4. the Mall, Bethesda Terrace and Fountain --------------------------------------
-# The Mall runs along x = 0 from y = +40 (south end, Literary Walk, just behind the spawn) to y = -330 (north end
-# at the Terrace): a 12 m paved walk with four elm rows every 12 m (inner rows at +-8.5 m use the big elm, outer
-# rows at +-16.5 m the smaller one), benches at +-6.6 m facing the walk and a lamp pair every 36 m.
-MALL_Y0, MALL_Y1 = 40.0, -330.0
-plane(PAVE2, 0, (MALL_Y0 + MALL_Y1) / 2, Z0 + 0.06, 12.0, MALL_Y0 - MALL_Y1)
+# ---- 3. the Mall, Bethesda Terrace and the Angel fountain ---------------------------------------------------
+MALL_Y0, MALL_Y1 = 400.0, 40.0  # the Mall runs from the Literary Walk (+Y) up to the Terrace at the origin
+kit.ribbon([(0, MALL_Y0), (0, MALL_Y1)], 12.0, 'flagstone')
 mark_line([(0, MALL_Y0), (0, MALL_Y1)], 12, 1)
 for y in range(int(MALL_Y1), int(MALL_Y0), 12):
     for x in (-8.5, 8.5, -16.5, 16.5):
@@ -647,95 +651,86 @@ for y in range(int(MALL_Y1), int(MALL_Y0), 12):
             rng.uniform(0, 6.28),
         )
         st('mall_elms')
-    for x in (-6.6, 6.6):
-        put(BENCH, x, y + 6, 0, 1.0, math.pi / 2 if x < 0 else -math.pi / 2)
-        st('benches')
+    kit.bench(-6.6, y + 6, -math.pi / 2, -1)  # the walk runs toward -Y; a bench on each side faces it
+    kit.bench(6.6, y + 6, -math.pi / 2, 1)
     if (y // 12) % 3 == 0:
         for x in (-7.2, 7.2):
             put(LAMP_SHORT, x, y + 1, 0, 1.0, 0)
             st('lamps')
-# every named artwork / memorial node in the park: a 1.6 m grey plinth with the statue mesh at 1.3x on top
 for nm, x, y in [
     (p['tags']['name'], p['x'], p['y'])
     for p in F['points']
     if p['kind'] in ('artwork', 'memorial') and p['tags'].get('name') and in_park(p['x'], p['y'])
 ]:
-    box('grey', x, y, Z0, 1.6, 1.4, 1.4)
+    box('grey', x, y, ground(x, y) - 0.2, 1.8, 1.4, 1.4)
     put(STATUE, x, y, 1.6, 1.3, rng.uniform(0, 6.28))
     st('statues')
-# Bethesda Terrace: Terrace Drive crosses on a 4 m embankment over the arcade; twin stairs drop to the fountain plaza
-# The OSM way named 'Bethesda Arcade' gives the arcade axis (ayaw, local u) and centre; the drive runs along it on
-# a 16 x 70 m concrete embankment (deck bottom at 4.0 m) with asphalt on top, the arcade passage is the gap between
-# the two brick side walls, and the stairs are sloping slabs from the deck edge (u = +-14) down to ground (u = +-26).
+# Terrace Drive crosses the arcade on a 4 m embankment; real stairs drop to the fountain plaza on the Lake side
 ARC = next(l for l in F['lines'] if l['tags'].get('name') == 'Bethesda Arcade')
-ax0, ay0 = ARC['pts'][0]
-ax1, ay1 = ARC['pts'][-1]
+(ax0, ay0), (ax1, ay1) = ARC['pts'][0], ARC['pts'][-1]
 acx, acy = (ax0 + ax1) / 2, (ay0 + ay1) / 2
 ayaw = math.atan2(ay1 - ay0, ax1 - ax0)
-box('concrete', acx, acy, Z0 + 4.0, 0.6, 16, 70, ayaw)
-plane(ASPHALT, acx, acy, Z0 + 4.65, 12, 70, ayaw)
+gA = ground(acx, acy)
+box('concrete', acx, acy, gA + 4.0, 0.6, 16, 70, ayaw)
+kit.surface('asphalt', acx, acy, 12, 70, ayaw, z_base=gA + 4.6)
 for sgn in (-1, 1):
-    box(
-        'brick', *l2w(acx, acy, ayaw, sgn * 7.5, 0), Z0, 4.0, 1.0, 70, ayaw
-    )  # arcade side walls (16 m wide passage under the drive)
-    for u in (-30, -18, 18, 30):
-        add(HANDRAIL, *l2w(acx, acy, ayaw, sgn * 7.0, u), Z0 + 4.7, 1, 1, 1, ayaw + math.pi / 2)
-    pitched(
-        'grey', *l2w(acx, acy, ayaw, sgn * 14, 0), Z0 + 4.6, *l2w(acx, acy, ayaw, sgn * 26, 0), Z0 + 0.05, 8.0
-    )  # grand stairs down to the plaza
-FX, FY = l2w(acx, acy, ayaw, 0, -48)  # fountain plaza north of the arcade (toward the Lake)
-# Bethesda Fountain: 70 x 60 m plaza, a 29 m basin (0.9 m rim), pedestal, upper bowl and stem stacked to 6.4 m,
-# water tiles within a 13 m radius just under the rim, the Angel statue at 2.4x on top, 40 onlookers in a 17 m ring
-plane(PAVE2, FX, FY, Z0 + 0.06, 70, 60, ayaw)
+    kit.wall(
+        [l2w(acx, acy, ayaw, sgn * 7.5, -35), l2w(acx, acy, ayaw, sgn * 7.5, 35)], 'retaining', 4.0
+    )  # the arcade: a 15 m passage under the drive
+    kit._raised_parapet([l2w(acx, acy, ayaw, sgn * 7.0, -34), l2w(acx, acy, ayaw, sgn * 7.0, 34)], gA + 4.6)
+    fx_, fy_ = l2w(acx, acy, ayaw, sgn * 20, -12)
+    kit.stairs(fx_, fy_, ayaw + (0.0 if sgn < 0 else math.pi), 4.4, 8.0)
+FX, FY = l2w(acx, acy, ayaw, 0, -48)
+kit.surface('flagstone', FX, FY, 70, 60, ayaw)
 mark_poly([l2w(FX, FY, ayaw, u, v) for (u, v) in ((-35, -30), (35, -30), (35, 30), (-35, 30))], 3)
-cylinder('grey', FX, FY, Z0, 0.9, 29.0)
-cylinder('grey', FX, FY, Z0, 3.0, 3.0)
-cylinder('grey', FX, FY, Z0 + 3.0, 1.2, 6.0)
-cylinder('grey', FX, FY, Z0 + 4.2, 2.2, 1.2)
+gF = ground(FX, FY) + LAYER['flagstone']
+cylinder('grey', FX, FY, gF - 0.1, 0.9, 29.0)
+cylinder('grey', FX, FY, gF, 3.0, 3.0)
+cylinder('grey', FX, FY, gF + 3.0, 1.2, 6.0)
+cylinder('grey', FX, FY, gF + 4.2, 2.2, 1.2)
 for j in range(-3, 4):
     for i in range(-3, 4):
         if math.hypot(i * 4, j * 4) < 13:
-            add(WATER, FX + i * 4, FY + j * 4, Z0 + 0.75, 1, 1, 1)
-put(STATUE, FX, FY, 6.4, 2.4, ayaw + math.pi)
+            add(WATER, FX + i * 4, FY + j * 4, gF + 0.75, 1, 1, 1)
+add(STATUE, FX, FY, gF + 6.4, 2.4, 2.4, 2.4, ayaw + math.pi)
 st('bethesda')
 for q in range(40):
-    a = q / 40 * 6.283
-    put(rng.choice(PEOPLE), FX + 17 * math.cos(a), FY + 17 * math.sin(a), 0.06, 1.0, a + math.pi)
-# ---- 5. hand-placed landmarks OSM only names ---------------------------------------------
-# Positions are WGS84 through ll(); sizes are approximate real dimensions.
-OBX, OBY = ll(40.77962, -73.96541)  # Cleopatra's Needle, 21 m, on its granite base
-box('black', OBX, OBY, Z0, 2.2, 5, 5)
-box('grey', OBX, OBY, Z0 + 2.2, 18.5, 2.4, 2.4)
-add(PYRAMID, OBX, OBY, Z0 + 21.7, 2.4, 2.4, 2.0, 0)  # pyramidion: SM_Pyramide is 1 m, centre pivot
-plane(PAVE2, OBX, OBY, Z0 + 0.06, 24, 24)
+    a_ = q / 40 * 6.283
+    put(rng.choice(PEOPLE), FX + 17 * math.cos(a_), FY + 17 * math.sin(a_), LAYER['flagstone'], 1.0, a_ + math.pi)
+
+# ---- 4. hand-placed landmarks OSM only names ---------------------------------------------------------------
+OBX, OBY = ll(40.77962, -73.96541)  # Cleopatra's Needle: 21 m on a granite base
+gO = ground(OBX, OBY)
+kit.surface('flagstone', OBX, OBY, 24, 24)
+box('black', OBX, OBY, gO, 2.2, 5, 5)
+box('grey', OBX, OBY, gO + 2.2, 18.5, 2.4, 2.4)
+add(PYRAMID, OBX, OBY, gO + 21.7, 2.4, 2.4, 2.0, 0)
 st('obelisk')
-# Strawberry Fields: the Imagine mosaic site from the OSM memorial node (fixed coordinates as a fallback); a 24 m
-# plaza ringed by 10 benches at 11 m facing inwards. The mosaic decal itself is placed in section 9.
 IMX, IMY = next(
     ((p['x'], p['y']) for p in F['points'] if p['tags'].get('name') == 'Strawberry Fields' and p['kind'] == 'memorial'),
     ll(40.77565, -73.97524),
 )
-plane(PAVE2, IMX, IMY, Z0 + 0.06, 24, 24)
+kit.surface('flagstone', IMX, IMY, 24, 24)
 st('imagine')
 for q in range(10):
-    a = q / 10 * 6.283
-    put(BENCH, IMX + 11 * math.cos(a), IMY + 11 * math.sin(a), 0, 1.0, a + math.pi / 2)
-TGX, TGY = ll(40.77215, -73.97785)  # Tavern on the Green (OSM has no footprint for it here)
-# a 40 x 22 x 7 m brick block on the park grid with a roof slab overhanging 1 m, and a terrace with 10 tables
-box('brick', TGX, TGY, Z0, 7.0, 40, 22, pth)
-box('concrete', TGX, TGY, Z0 + 7.0, 0.5, 42, 24, pth)
-plane(PAVE2, *l2w(TGX, TGY, pth, 0, 18), Z0 + 0.06, 40, 12, pth)
+    a_ = q / 10 * 6.283
+    kit.bench(IMX + 11 * math.cos(a_), IMY + 11 * math.sin(a_), a_ + math.pi / 2, -1)
+TGX, TGY = ll(40.77215, -73.97785)  # Tavern on the Green: textured workshop meshes and a terrace
+gT = ground(TGX, TGY)
+add('NewRow_97', *l2w(TGX, TGY, pth, -6, 0), gT, 1.6, 1.6, 1.3, pth)
+add('NewRow_95', *l2w(TGX, TGY, pth, 20, 0), gT, 1.3, 1.3, 1.2, pth)
+kit.surface('flagstone', *l2w(TGX, TGY, pth, 0, 18), 44, 12, pth)
 for q in range(10):
-    put(TABLE, *l2w(TGX, TGY, pth, -18 + q * 4, 18), 0, 1.0, pth)
-    put(CHAIR, *l2w(TGX, TGY, pth, -18 + q * 4, 19.5), 0, 1.0, pth + math.pi)
+    put(TABLE, *l2w(TGX, TGY, pth, -18 + q * 4, 18), LAYER['flagstone'], 1.0, pth)
+    put(CHAIR, *l2w(TGX, TGY, pth, -18 + q * 4, 19.5), LAYER['flagstone'], 1.0, pth + math.pi)
 CHX, CHY = ll(40.77465, -73.97345)  # Cherry Hill fountain and turnaround
-plane(PAVE2, CHX, CHY, Z0 + 0.06, 40, 40)
-cylinder('grey', CHX, CHY, Z0, 0.8, 7.0)
-cylinder('grey', CHX, CHY, Z0, 3.5, 0.8)
+kit.surface('flagstone', CHX, CHY, 40, 40)
+gC = ground(CHX, CHY) + LAYER['flagstone']
+cylinder('grey', CHX, CHY, gC - 0.1, 0.8, 7.0)
+cylinder('grey', CHX, CHY, gC, 3.5, 0.8)
 st('cherry_hill')
-# ---- 6. buildings: park structures and the city ---------------------------------------
-# Roof / spire heights (m) of towers around the park that OSM often leaves without a height; matched by name
-# substring and used as a floor for the tagged height.
+
+# ---- 5. buildings: park structures (asset-first) and the city -----------------------------------------------
 SUPERTALL = {
     'One57': 306,
     'Central Park Tower': 472,
@@ -753,16 +748,21 @@ SUPERTALL = {
     'Essex House': 155,
     'Hampshire House': 105,
 }
+COTTAGES = {
+    'Swedish Cottage Marionette Theatre': 'NewRow_788',
+    'The Dairy (Visitor Center and Gift Shop)': 'NewRow_790',
+    'Chess and Checkers House': 'NewRow_791',
+    'Mineral Springs': 'NewRow_789',
+    "Ladies' Pavilion": 'NewRow_233',
+    'Cop Cot': 'NewRow_233',
+    'Summerhouse at the Dene': 'NewRow_233',
+    'Ballfields Café': 'NewRow_231',
+    'Zoo Tickets': 'NewRow_230',
+}
 
 
 def material_for(h, tags, key):
-    """Box material ('concrete', 'black', 'grey', 'brick') for a building of height h (m) from its OSM tags.
-
-    `key` (any stable string, the first footprint vertex) is hashed to a 0..1 value so the mix is varied but
-    reproducible. Civic / religious / hotel buildings under 90 m read as limestone (concrete); towers >= 150 m are
-    70 % black glass, else grey; 60..150 m are 45 % glass, 30 % grey, 25 % concrete; low buildings follow the
-    building:colour tag (brick / red / brown -> brick) or split 50/50 brick / concrete. Splits are empirical.
-    """
+    """Facade colour from height, OSM colour and a stable hash of the footprint."""
     hv = int(hashlib.md5(key.encode()).hexdigest()[:4], 16) / 65535
     col = (tags.get('building:colour') or '').lower()
     if tags.get('building') in ('church', 'cathedral', 'synagogue', 'museum', 'hotel') and h < 90:
@@ -776,24 +776,16 @@ def material_for(h, tags, key):
     return 'brick' if hv < 0.5 else 'concrete'
 
 
-facades = []  # (cx, cy, z0, h, lx, ly, th, style, key) of city boxes that may get window decals
-bld_count = 0
-building_rects = []  # (cx, cy, lx, ly, th, h) of every building box, for the spatial index below
-park_x_min, park_x_max = min(q[0] for q in PARK), max(q[0] for q in PARK)
-
-
 def near_park(x, y):
-    """True where a city building is close enough to the park to deserve window decals: the band across the south
-    end (y -420..160, within 900 m of the axis), the blocks flanking the park's long sides (within 350 m beyond
-    its ~420 m half-width) and the blocks south of it within 700 m of the axis (empirical)."""
+    """Within about 350 m of the park rectangle: these facades get window decals."""
     return (-420 < y < 160 and abs(x) < 900) or (y <= 160 and abs(x) - 420 < 350) or (y >= 160 and (abs(x) < 700))
 
 
-# Height: the OSM height tag (metres, a trailing 'm' tolerated), else building:levels x 3.4 m, raised to the
-# SUPERTALL figure when the name matches; with nothing at all 6 m inside the park, 22 m for small city footprints
-# and 35 m for large ones. --lite drops small (< 400 m^2) buildings more than 1.9 km from the park's middle.
+facades = []
+building_rects = []
+bld_count = 0
 for p in F['polys']:
-    if p['kind'] not in ('building',):
+    if p['kind'] != 'building':
         continue
     pts, tags = p['pts'], p['tags']
     cx, cy = centroid(pts)
@@ -801,7 +793,6 @@ for p in F['polys']:
     if a < 10 or abs(cx) > BOARD or abs(cy) > BOARD:
         continue
     nm = tags.get('name') or ''
-    h = 0.0
     try:
         h = float(str(tags.get('height', '')).replace('m', '').strip() or 0)
     except ValueError:
@@ -817,41 +808,41 @@ for p in F['polys']:
     inside = in_park(cx, cy)
     if not h:
         h = 6.0 if inside else (22.0 if a < 800 else 35.0)
-    if LITE and not inside and math.hypot(cx, cy + 1200) > 1900 and a < 400:
+    if LITE and not inside and math.hypot(cx, cy - 600) > 1300 and a < 400:
         continue
-    kind = material_for(h, tags, str(p['pts'][0]))
+    kind = material_for(h, tags, str(pts[0]))
     bld_count += 1
     if inside:
         mark_poly(pts, 3)
-    if nm == 'Belvedere Castle':  # Vista Rock mound, then the castle and its tower
-        # mound: three grey tiers (4 + 4 + 3.5 = 11.5 m) on the castle's rectangle widened by 30 m, scaled 1.0 /
-        # 0.8 / 0.62; 30 rock meshes land on whichever tier their fractional distance from the centre falls in
-        for k, (sc, hh) in enumerate(((1.0, 4.0), (0.8, 4.0), (0.62, 3.5))):
-            rx, ry, lx, ly, th = min_rect(pts)
-            box(
-                'grey',
-                rx,
-                ry,
-                Z0 + sum(x[1] for x in ((1.0, 4.0), (0.8, 4.0), (0.62, 3.5))[:k]),
-                hh,
-                (lx + 30) * sc,
-                (ly + 30) * sc,
-                th,
-            )
-        rx_, ry_, lx_, ly_, th_ = min_rect(pts)
-        for _ in range(30):  # rocks sit on the mound tier they land on
-            u, v = rng.uniform(-(lx_ + 30) / 2, (lx_ + 30) / 2), rng.uniform(-(ly_ + 30) / 2, (ly_ + 30) / 2)
-            fx_, fy_ = l2w(rx_, ry_, th_, u, v)
-            fr_ = max(abs(u) / ((lx_ + 30) / 2), abs(v) / ((ly_ + 30) / 2))
-            dz = 11.5 if fr_ <= 0.62 else (8.0 if fr_ <= 0.8 else 4.0)
-            put(rng.choice(ROCKS + [CLIFF]), fx_, fy_, dz - 0.3, rng.uniform(1.5, 3.0), rng.uniform(0, 6.28))
-        # the castle on top of the mound: 9 m brick massing with a capping slab, a 7 m round tower 20 m tall with
-        # a corbelled cap, pyramid roof and 12 merlons, and a 16 m paved terrace on the -u side
-        base = Z0 + 11.5
-        for rx, ry, lx, ly, th in fill_rects(pts, 6):
-            box('brick', rx, ry, base, 9.0, lx, ly, th)
-            box('concrete', rx, ry, base + 9.0, 0.5, lx + 0.6, ly + 0.6, th)
+    g = ground(cx, cy)
+    if nm in COTTAGES:  # small Victorian structures: a real house / pavilion mesh fitted to the footprint
         rx, ry, lx, ly, th = min_rect(pts)
+        row = COTTAGES[nm]
+        mx, my, mh = size(row)
+        sx, sy = max(0.6, min(2.0, (lx + 2) / mx)), max(0.6, min(2.0, (ly + 2) / my))
+        add(row, rx, ry, g + 0.15, sx, sy, min(sx, sy), th)
+        st('cottages')
+        continue
+    if nm == 'Belvedere Castle':  # Vista Rock mound, then the castle and its tower
+        rx, ry, lx, ly, th = min_rect(pts)
+        tiers = ((1.0, 4.0), (0.8, 4.0), (0.62, 3.5))
+        for k_, (sc, hh) in enumerate(tiers):
+            box('grey', rx, ry, g - 0.3 + sum(t[1] for t in tiers[:k_]), hh + 0.3, (lx + 30) * sc, (ly + 30) * sc, th)
+        for _ in range(30):
+            u, v = rng.uniform(-(lx + 30) / 2, (lx + 30) / 2), rng.uniform(-(ly + 30) / 2, (ly + 30) / 2)
+            fr_ = max(abs(u) / ((lx + 30) / 2), abs(v) / ((ly + 30) / 2))
+            dz = 11.5 if fr_ <= 0.62 else (8.0 if fr_ <= 0.8 else 4.0)
+            put(
+                rng.choice(ROCKS + [CLIFF]),
+                *l2w(rx, ry, th, u, v),
+                dz - 0.3,
+                rng.uniform(1.5, 3.0),
+                rng.uniform(0, 6.28),
+            )
+        base = g + 11.5
+        for rx_, ry_, lx_, ly_, th_ in fill_rects(pts, 6):
+            box('brick', rx_, ry_, base, 9.0, lx_, ly_, th_)
+            box('concrete', rx_, ry_, base + 9.0, 0.5, lx_ + 0.6, ly_ + 0.6, th_)
         tx, ty = l2w(rx, ry, th, lx * 0.3, 0)
         cylinder('grey', tx, ty, base, 20.0, 7.0)
         cylinder('grey', tx, ty, base + 20, 2.0, 8.0)
@@ -859,65 +850,50 @@ for p in F['polys']:
         for q in range(12):
             a_ = q / 12 * 6.283
             box('grey', tx + 4.2 * math.cos(a_), ty + 4.2 * math.sin(a_), base + 20.5, 1.2, 1.0, 1.0, a_)
-        plane(PAVE2, *l2w(rx, ry, th, -lx * 0.5 - 8, 0), base + 0.06, 16, ly + 10, th)
+        kit.surface('flagstone', *l2w(rx, ry, th, -lx * 0.5 - 8, 0), 16, ly + 10, th, z_base=base)
+        kit.stairs(*l2w(rx, ry, th, -lx * 0.5 - 24, 0), th, 11.5, 6.0)
         st('belvedere')
         continue
     if nm == 'Delacorte Theater':
-        # open-air theatre: a 6 m brick wall along the footprint outline and a 1.2 m stage slab
-        for (x0, y0), (x1, y1) in zip(pts, pts[1:] + pts[:1]):
-            box(
-                'brick',
-                (x0 + x1) / 2,
-                (y0 + y1) / 2,
-                Z0,
-                6.0,
-                math.hypot(x1 - x0, y1 - y0),
-                0.5,
-                math.atan2(y1 - y0, x1 - x0),
-            )
-        box('concrete', cx, cy, Z0, 1.2, 20, 14, pth)
+        kit.wall(pts + pts[:1], 'retaining', 6.0)
+        box('concrete', cx, cy, g, 1.2, 20, 14, pth)
         st('delacorte')
         continue
     if nm == 'Central Park Carousel':
-        # a 16 m drum with a pyramid roof (centre pivot: 7.5 = drum top 5 + half of the 5 m roof) and 12 riders.
-        # NB: the `continue` below is inside the riders loop, so the carousel also falls through to the generic
-        # box massing further down (kept as is: changing it would change the map).
-        cylinder('default', cx, cy, Z0, 5.0, 16.0)
-        add(PYRAMID, cx, cy, Z0 + 7.5, 18, 18, 5, 0)
+        cylinder('default', cx, cy, g - 0.2, 5.2, 16.0)
+        add(PYRAMID, cx, cy, g + 7.5, 18, 18, 5, 0)
         for q in range(12):
             a_ = q / 12 * 6.283
-            put(rng.choice(PEOPLE), cx + 11 * math.cos(a_), cy + 11 * math.sin(a_), 0.05, 1.0, a_ + math.pi)
-            st('carousel')
-            continue
+            put(rng.choice(PEOPLE), cx + 11 * math.cos(a_), cy + 11 * math.sin(a_), 0.0, 1.0, a_ + math.pi)
+        st('carousel')
+        continue
     if nm == 'Naumburg Bandshell':
-        # the half-dome as a 9 m cylinder spanning the outline's long side, on a 1.5 m stage (the ternary is a
-        # leftover and always picks 'grey')
         rx, ry, lx, ly, th = min_rect(pts)
-        cylinder('concrete' if False else 'grey', cx, cy, Z0, 9.0, max(lx, ly))
-        box('concrete', cx, cy, Z0, 1.5, lx + 4, ly + 4, th)
+        cylinder('grey', cx, cy, g, 9.0, max(lx, ly))
+        box('concrete', cx, cy, g - 0.2, 1.7, lx + 4, ly + 4, th)
         st('bandshell')
         continue
-    # generic massing: up to 10 rectangles for big footprints, 4 for small. City towers of 45..250 m with a side
-    # >= 14 m and > 1500 m^2 that are not glass get 1916-zoning setbacks (50 % / 30 % / 20 % of h on 100 / 80 / 60 %
-    # footprints); everything else is one box. Window decals (section 6b) only for >= 25 m boxes near the park.
     rects = fill_rects(pts, 10 if a > 400 else 4)
-    for rx, ry, lx, ly, th in rects:
+    if not inside and not LITE:  # paved block around city buildings (the landscape is grass)
+        rx, ry, lx, ly, th = min_rect(pts)
+        kit.surface('pavement3', rx, ry, lx + 8, ly + 8, th)
+    placed = kit.building(rects, h, kind, named=(bool(nm) and inside) or h > 60)
+    for rx, ry, lx, ly, th, top, used_mesh in placed:
         building_rects.append((rx, ry, lx, ly, th, h))
-        if h >= 45 and not inside and min(lx, ly) >= 14 and a > 1500 and 'black' != kind and h < 250:
-            box(kind, rx, ry, Z0, 0.5 * h, lx, ly, th)
-            box(kind, rx, ry, Z0 + 0.5 * h, 0.3 * h, lx * 0.8, ly * 0.8, th)
-            box(kind, rx, ry, Z0 + 0.8 * h, 0.2 * h, lx * 0.6, ly * 0.6, th)
-        else:
-            box(kind, rx, ry, Z0, h, lx, ly, th)
-        if h >= 25 and not inside and near_park(rx, ry) and min(lx, ly) >= 6 and WITH_WINDOWS:
-            facades.append((rx, ry, Z0, h, lx, ly, th, 'glass' if kind == 'black' else 'punched', str(rx) + str(ry)))
-        # roof clutter (not --lite): 30 % of city roofs over 150 m^2 get an elevator bulkhead, 40 % of those a
-        # water tower (the farm grain-silo mesh at 0.8-1.1x)
-        if h >= 20 and not inside and not LITE and lx * ly > 150 and rng.random() < 0.3:
+        if (
+            WITH_WINDOWS
+            and not used_mesh
+            and min(lx, ly) >= 6
+            and ((h >= 25 and not inside and near_park(rx, ry)) or (inside and h >= 8))
+        ):
+            facades.append(
+                (rx, ry, g, h, lx, ly, th, 'glass' if kind == 'black' else 'punched', str(rx) + str(ry), inside)
+            )
+        if not used_mesh and h >= 20 and not inside and not LITE and lx * ly > 150 and rng.random() < 0.3:
             box(
                 'grey',
                 *l2w(rx, ry, th, rng.uniform(-lx / 4, lx / 4), rng.uniform(-ly / 4, ly / 4)),
-                Z0 + h,
+                top,
                 rng.uniform(2.5, 4),
                 3,
                 4,
@@ -928,14 +904,13 @@ for p in F['polys']:
                 add(
                     WATER_TOWER,
                     *l2w(rx, ry, th, rng.uniform(-lx / 4, lx / 4), rng.uniform(-ly / 4, ly / 4)),
-                    Z0 + h,
+                    top,
                     s,
                     s,
                     s,
                     th,
                 )
 st('buildings', bld_count)
-# spatial index: 40 m buckets -> indices of the building rectangles whose bounding circle touches the bucket
 rect_index = {}
 for i, (rx, ry, lx, ly, th, h) in enumerate(building_rects):
     r = math.hypot(lx, ly) / 2
@@ -945,11 +920,7 @@ for i, (rx, ry, lx, ly, th, h) in enumerate(building_rects):
 
 
 def building_at(x, y, margin=0.5):
-    """Index into building_rects of a building box containing (x, y) (grown by `margin` m on each side), or None.
-
-    Only the bucket containing the point is searched, which is enough because every rectangle is registered in all
-    the buckets it can reach.
-    """
+    """Index of the building rectangle containing (x, y), or None."""
     for i in rect_index.get((int(x // 40), int(y // 40)), ()):
         rx, ry, lx, ly, th, h = building_rects[i]
         c, s = math.cos(th), math.sin(th)
@@ -960,14 +931,8 @@ def building_at(x, y, margin=0.5):
     return None
 
 
-# window decals on facades facing the park
 def window_png(style, cols, rows, path):
-    """Render a cols x rows window-grid PNG (48 px per window, transparent background) to `path`.
-
-    'punched': masonry look, each cell a dark window with a light sill line and a pale frame; anything else
-    ('glass'): curtain wall, the whole cell glazed blue-grey with a darker spandrel band over the bottom 26 % and
-    light mullion lines. `shade` varies per row with a sine so floors do not all look identical. Needs Pillow.
-    """
+    """Window-grid decal texture: 'punched' stone windows or a 'glass' curtain wall."""
     from PIL import Image, ImageDraw
 
     cw, ch = 48, 48
@@ -996,43 +961,38 @@ def window_png(style, cols, rows, path):
     img.save(path)
 
 
-# allowed grid sizes: facades snap to the nearest so a bounded set of PNGs is shared by many buildings
 COLS_B = [3, 4, 5, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32]
 ROWS_B = [6, 8, 10, 12, 15, 18, 22, 26, 30, 36, 42, 50, 60, 72, 85, 100]
 
 
 def nearest(v, b):
-    """The value in `b` closest to `v`."""
+    """Closest bucket value."""
     return min(b, key=lambda q: abs(q - v))
 
 
-# One decal per facade: rows from the floor height (3.6 m masonry, 4.0 m glass), columns from the window pitch
-# (2.6 m / 1.6 m). A face is skipped when a point 0.8 m outside it lies in a neighbour at least about half as tall
-# (party wall) or when neither 60 m nor 200 m along its normal is in the park. The decal sits at the face centre,
-# half way up, scale (2.0 depth, h/4, length/4) with the editor's wall basis (decal_rot); the row name is the PNG
-# file name, kept unique and stable by the fixed prefix plus the MD5 of the grid key.
-for cx, cy, z0, h, lx, ly, th, style, key in facades:
+for cx, cy, z0, h, lx, ly, th, style, key, inside in facades:
     fl = 3.6 if style == 'punched' else 4.0
     wm = 2.6 if style == 'punched' else 1.6
     rows_n = nearest(h / fl, ROWS_B)
     for fx, fy, length, nyaw, u_edge, v_edge, nu, nv in rect_faces(cx, cy, lx, ly, th):
         px, py = fx + 0.8 * math.cos(nyaw), fy + 0.8 * math.sin(nyaw)
         j = building_at(px, py, 0.0)
-        if j is not None and building_rects[j][5] + 1 >= z0 + h * 0.5:
+        if j is not None and building_rects[j][5] + 1 >= h * 0.5:
             continue
-        if not in_park(fx + 60 * math.cos(nyaw), fy + 60 * math.sin(nyaw)) and not in_park(
-            fx + 200 * math.cos(nyaw), fy + 200 * math.sin(nyaw)
+        if (
+            not inside
+            and not in_park(fx + 60 * math.cos(nyaw), fy + 60 * math.sin(nyaw))
+            and not in_park(fx + 200 * math.cos(nyaw), fy + 200 * math.sin(nyaw))
         ):
-            continue  # only faces that look at the park
+            continue
         cols_n = nearest(length / wm, COLS_B)
         k = f'{style}_{cols_n}x{rows_n}'
         name = 'decal_1791400000-' + hashlib.md5(k.encode()).hexdigest().upper() + '.png'
         decal_files[name] = ('win', style, cols_n, rows_n)
         add(name, fx, fy, z0 + h / 2, 2.0, h / 4, length / 4, rot=decal_rot(nyaw), store=decal_rows)
         st('win_decals')
-# ---- 7. trees: mapped trees, woods, the rest of the park, street trees -----------------
-# OSM genus -> editor tree row (first word of genus or species, lower case); plane and linden use the alder mesh
-# as the nearest look-alike. Unknown genera get a random TREES row.
+
+# ---- 6. trees: mapped trees by genus, woods, the rest of the park, the Pinetum, street trees ----------------
 GENUS = {
     'ulmus': ELM,
     'acer': MAPLE,
@@ -1045,17 +1005,13 @@ GENUS = {
 
 
 def tree_row(tags):
-    """Tree row for an OSM tree node from its genus / species tag (random TREES row when unknown)."""
+    """Tree mesh for an OSM genus/species tag."""
     g = (tags.get('genus') or tags.get('species') or '').lower().split(' ')[0]
     return GENUS.get(g, rng.choice(TREES))
 
 
 def tree(x, y, row=None, s=None):
-    """Plant one tree at (x, y) unless the cell is path, water or hard (1/2/3); lawns and woods are allowed.
-
-    Random TREES row and 0.85-1.35x scale unless given, random yaw, then the cell is marked 1 so nothing else lands
-    on it. Returns True when a tree was placed.
-    """
+    """A tree on free ground; False if the cell is a path, water or hard surface."""
     if occ_at(x, y) in (1, 2, 3):
         return False
     s = s or rng.uniform(0.85, 1.35)
@@ -1065,130 +1021,262 @@ def tree(x, y, row=None, s=None):
     return True
 
 
-# 7a. every mapped tree inside the park at its real position
 for p in F['points']:
     if p['kind'] == 'tree' and in_park(p['x'], p['y']):
         tree(p['x'], p['y'], tree_row(p['tags']))
-# 7b. woods: one tree per 55 m^2 of each wood polygon (up to 3 tries per tree), bigger species mix, 0.9-1.5x
 for p in F['polys']:
     if p['kind'] != 'wood' or not in_park(*centroid(p['pts'])):
         continue
     xs = [q[0] for q in p['pts']]
     ys = [q[1] for q in p['pts']]
+    pine = 'Pinetum' in (p['tags'].get('name') or '')
     n = int(poly_area(p['pts']) / 55)
     for _ in range(n * 3):
         if n <= 0:
             break
         x, y = rng.uniform(min(xs), max(xs)), rng.uniform(min(ys), max(ys))
         if point_in_poly(x, y, p['pts']) and tree(
-            x, y, rng.choice(TREES + [OAK, BIG_ELM] + PINES), rng.uniform(0.9, 1.5)
+            x, y, rng.choice(PINES) if pine else rng.choice(TREES + [OAK, BIG_ELM] + PINES), rng.uniform(0.9, 1.5)
         ):
             n -= 1
-# 7c. the rest of the park: one tree per 420 m^2 of free ground (not lawns either), thinned to half next to paths
 xs = [q[0] for q in PARK]
 ys = [q[1] for q in PARK]
 want = int(poly_area(PARK) / 420)
 for _ in range(want * 4):
     if want <= 0:
         break
-    x, y = rng.uniform(min(xs), max(xs)), rng.uniform(min(ys), max(ys))
+    x, y = (
+        rng.uniform(max(min(xs), -BOARD), min(max(xs), BOARD)),
+        rng.uniform(max(min(ys), -BOARD), min(max(ys), BOARD)),
+    )
     if not in_park(x, y) or occ_at(x, y) in (1, 2, 3, 4):
         continue
     if any(occ_at(x + dx, y + dy) == 1 for dx in (-4, 4) for dy in (-4, 4)) and rng.random() < 0.5:
-        continue  # fewer trees right on the paths
+        continue
     if tree(x, y):
         want -= 1
-# 7d. mapped street trees outside the park (not --lite), skipped where a building box stands
 for p in F['points']:
     if p['kind'] == 'tree' and not in_park(p['x'], p['y']) and not LITE and building_at(p['x'], p['y'], 0.5) is None:
         put(rng.choice(TREES), p['x'], p['y'], 0, rng.uniform(0.8, 1.1), rng.uniform(0, 6.28))
         st('street_trees')
-# ---- 8. furniture and people along the paths --------------------------------------------
-# Walk each in-park path in ~3 m steps with a running distance `acc`; the side alternates every 25 m. Lamps every
-# 25 m at the edge facing the path, benches every 11 m on drives and pedestrian ways (opposite side, facing the
-# path), trash cans every 60 m, people every 14 m on drives / 28 m on paths anywhere across the width, cars every
-# 45 m on drives in either lane (+-3 m). Bridges get people only. Spacings are empirical.
-for pts, w, row, inside, k, nm, bridge in path_lines:
-    if not inside:
+for p in F['polys']:  # the Conservatory Garden's hedges, if it is on the board
+    if (p['tags'].get('name') or '') == 'Conservatory Garden' and abs(centroid(p['pts'])[1]) < BOARD:
+        cx, cy, lx, ly, th = min_rect(p['pts'])
+        for v in (-ly / 2 + 6, ly / 2 - 6):
+            for x, y, yaw, dist in along_line([l2w(cx, cy, th, -lx / 2 + 6, v), l2w(cx, cy, th, lx / 2 - 6, v)], 2.0):
+                put(rng.choice(BUSHES), x, y, 0, 1.1, rng.uniform(0, 6.28))
+        st('conservatory_garden')
+
+# ---- 7. furniture, vendors and people -----------------------------------------------------------------------
+mapped_lamps = {cell(p['x'], p['y']) for p in F['points'] if p['kind'] == 'lamp' and in_park(p['x'], p['y'])}
+for p in F['points']:
+    if p['kind'] == 'lamp' and in_park(p['x'], p['y']):
+        put(LAMP_SHORT, p['x'], p['y'], 0, 1.0, rng.uniform(0, 6.28))
+        st('mapped_lamps')
+
+
+def nearest_path(x, y):
+    """(distance, path yaw, side) of the closest in-park path to a point; side +1 = the point is on the path's left."""
+    best = None
+    for pts, w, mat, inside, k, nm, bridge in path_lines:
+        if not inside:
+            continue
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            dx, dy = x1 - x0, y1 - y0
+            d2 = dx * dx + dy * dy
+            if d2 < 1e-6:
+                continue
+            t = max(0, min(1, ((x - x0) * dx + (y - y0) * dy) / d2))
+            d = math.hypot(x - (x0 + t * dx), y - (y0 + t * dy))
+            if best is None or d < best[0]:
+                cross = dx * (y - y0) - dy * (x - x0)
+                best = (d, math.atan2(dy, dx), 1 if cross > 0 else -1)
+    return best
+
+
+for p in F['points']:
+    if p['kind'] == 'bench' and in_park(p['x'], p['y']):
+        best = nearest_path(p['x'], p['y'])
+        if best and best[0] < 12:
+            kit.bench(p['x'], p['y'], best[1], best[2])
+            st('mapped_benches')
+for pts, w, mat, inside, k, nm, bridge in path_lines:
+    if not inside or bridge:
         continue
-    drive = row == ASPHALT and w >= 11
-    acc = 0.0
-    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
-        L = math.hypot(x1 - x0, y1 - y0)
-        yaw = math.atan2(y1 - y0, x1 - x0)
-        n = max(1, int(L / 3))
-        for q in range(n):
-            t = (q + 0.5) / n
-            x, y = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
-            acc += L / n
-            side = 1 if int(acc / 25) % 2 == 0 else -1
-            if acc % 25 < L / n and not bridge:
-                put(LAMP_SHORT, *l2w(x, y, yaw, 0, side * (w / 2 + 0.6)), 0, 1.0, yaw + side * math.pi / 2)
-                st('lamps')
-            if acc % 11 < L / n and (drive or k == 'pedestrian') and not bridge:
-                put(
-                    BENCH,
-                    *l2w(x, y, yaw, 0, -side * (w / 2 + 0.9)),
-                    0,
-                    1.0,
-                    yaw + (math.pi / 2 if side > 0 else -math.pi / 2),
-                )
-                st('benches')
-            if acc % 60 < L / n and not bridge:
-                put(TRASH, *l2w(x, y, yaw, 1.5, side * (w / 2 + 0.5)), 0, 1.0, yaw)
-            if acc % (14 if drive else 28) < L / n:
-                r = rng.random()
-                put(
-                    rng.choice(PEOPLE),
-                    *l2w(x, y, yaw, 0, rng.uniform(-w / 2 + 0.6, w / 2 - 0.6)),
-                    0.05,
-                    1.0,
-                    yaw + (0 if r < 0.5 else math.pi),
-                )
-                st('people')
-            if drive and acc % 45 < L / n and not bridge:
-                put(rng.choice(CARS), *l2w(x, y, yaw, 0, rng.choice([-3.0, 3.0])), 0.05, 1.0, yaw)
-                st('cars')
-# Sheep Meadow fence, playgrounds and entrances
-# one low (0.6x) fence piece per 4 m of outline around Sheep Meadow and every in-park playground; 140 people
-# lounging on the meadow (sitting and standing figures)
+    drive = mat == 'asphalt' and w >= 11
+    for x, y, yaw, dist in along_line(pts, 1.0):
+        side = 1 if int(dist / 25) % 2 == 0 else -1
+        if dist % 25 < 1 and cell(x, y) not in mapped_lamps:
+            put(LAMP_SHORT, *l2w(x, y, yaw, 0, side * (w / 2 + 0.6)), 0, 1.0, yaw + side * math.pi / 2)
+            st('lamps')
+        if dist % 11 < 1 and (drive or k == 'pedestrian'):
+            kit.bench(*l2w(x, y, yaw, 0, -side * (w / 2 + 0.9)), yaw, -side)
+        if dist % 60 < 1:
+            put(TRASH, *l2w(x, y, yaw, 1.5, side * (w / 2 + 0.5)), 0, 1.0, yaw)
+        if dist % (14 if drive else 28) < 1:
+            put(
+                rng.choice(PEOPLE),
+                *l2w(x, y, yaw, 0, rng.uniform(-w / 2 + 0.6, w / 2 - 0.6)),
+                LAYER[mat],
+                1.0,
+                yaw + (0 if rng.random() < 0.5 else math.pi),
+            )
+            st('people')
+        if drive and dist % 45 < 1:
+            put(rng.choice(CARS), *l2w(x, y, yaw, 0, rng.choice([-3.0, 3.0])), LAYER['asphalt'], 1.0, yaw)
+            st('cars')
 for p in F['polys']:
     nm = p['tags'].get('name') or ''
     if nm == 'Sheep Meadow' or (p['kind'] == 'plaza' and 'Playground' in nm and in_park(*centroid(p['pts']))):
-        for (x0, y0), (x1, y1) in zip(p['pts'], p['pts'][1:] + p['pts'][:1]):
-            L = math.hypot(x1 - x0, y1 - y0)
-            n = max(1, int(L // 4))
-            yaw = math.atan2(y1 - y0, x1 - x0)
-            for q in range(n):
-                t = (q + 0.5) / n
-                add(FENCE, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, Z0, 1, 1, 0.6, yaw)
-                st('fences')
+        kit.wall(p['pts'] + p['pts'][:1], 'fence', 1.5)
         if nm == 'Sheep Meadow':
-            cx, cy = centroid(p['pts'])
             xs = [q[0] for q in p['pts']]
             ys = [q[1] for q in p['pts']]
             for _ in range(140):
                 x, y = rng.uniform(min(xs), max(xs)), rng.uniform(min(ys), max(ys))
                 if point_in_poly(x, y, p['pts']):
-                    put(rng.choice(PEOPLE_SIT + PEOPLE), x, y, 0.03, 1.0, rng.uniform(0, 6.28))
+                    put(rng.choice(PEOPLE_SIT + PEOPLE), x, y, 0.0, 1.0, rng.uniform(0, 6.28))
                     st('people')
-# food carts at the mapped ice-cream / fast-food / cafe nodes inside the park, plus the strip within 30 m of
-# y = 440 outside it (empirical), wherever no building box stands
+# vendors: mapped food points in the park, a kiosk and crowds at every gate plaza, carts all along Central Park South
 for p in F['points']:
     if (
         p['kind'] in ('ice_cream', 'fast_food', 'cafe')
-        and (in_park(p['x'], p['y']) or abs(p['y'] - 440) < 30)
+        and in_park(p['x'], p['y'])
         and building_at(p['x'], p['y'], 1.0) is None
     ):
         put(rng.choice([FOOD_CART, FOOD_STALL]), p['x'], p['y'], 0, 1.0, rng.uniform(0, 6.28))
         st('carts')
+for p in F['polys']:
+    cx, cy = centroid(p['pts'])
+    if (
+        p['kind'] == 'plaza'
+        and in_park(cx, cy)
+        and abs(cy) < BOARD
+        and any(not in_park(cx + dx, cy + dy) for (dx, dy) in ((60, 0), (-60, 0), (0, 60), (0, -60)))
+    ):
+        kit.kiosk(cx + rng.uniform(-8, 8), cy + rng.uniform(-8, 8), rng.uniform(0, 6.28))
+        for q in range(2):
+            put(
+                rng.choice([FOOD_CART, FOOD_STALL]),
+                cx + rng.uniform(-12, 12),
+                cy + rng.uniform(-12, 12),
+                0,
+                1.0,
+                rng.uniform(0, 6.28),
+            )
+        for q in range(10):
+            put(
+                rng.choice(PEOPLE), cx + rng.uniform(-14, 14), cy + rng.uniform(-14, 14), 0.0, 1.0, rng.uniform(0, 6.28)
+            )
+        st('gate_vendors')
+south = sorted([(x, y) for (x, y) in PARK if y > max(q[1] for q in PARK) - 40], key=lambda q: q[0])
+if len(south) >= 2:
+    for x, y, yaw, dist in along_line([south[0], south[-1]], 38):
+        put(rng.choice([FOOD_CART, FOOD_STALL]), *l2w(x, y, yaw, 0, 9), 0, 1.0, yaw)
+        for q in range(4):
+            put(
+                rng.choice(PEOPLE),
+                *l2w(x, y, yaw, rng.uniform(-8, 8), rng.uniform(7, 12)),
+                0.0,
+                1.0,
+                rng.uniform(0, 6.28),
+            )
+        st('south_carts')
+# city edge: traffic, lamps and people on the streets that frame the park
+for pts, w, mat, inside, k, nm, bridge in path_lines:
+    if inside or k not in ('primary', 'secondary', 'tertiary', 'residential') or LITE:
+        continue
+    if not any(
+        in_park(x + dx, y + dy)
+        for (x, y) in pts[:: max(1, len(pts) // 4)]
+        for (dx, dy) in ((0, 0), (120, 0), (-120, 0), (0, 120), (0, -120))
+    ):
+        continue
+    for x, y, yaw, dist in along_line(pts, 36):
+        if building_at(x, y, 0.5) is not None:
+            continue
+        put(
+            rng.choice(CARS),
+            *l2w(x, y, yaw, 0, rng.choice([-w / 4, w / 4])),
+            LAYER['asphalt'],
+            1.0,
+            yaw + (0 if rng.random() < 0.5 else math.pi),
+        )
+        st('street_cars')
+        if int(dist) % 72 < 36:
+            for sgn in (-1, 1):
+                lx_, ly_ = l2w(x, y, yaw, 0, sgn * (w / 2 + 1.2))
+                if building_at(lx_, ly_, 0.3) is None:
+                    put(LAMP_TALL, lx_, ly_, LAYER['pavement2'], 1.0, yaw + sgn * math.pi / 2)
+                    st('street_lamps')
+        px_, py_ = l2w(x, y, yaw, rng.uniform(-10, 10), rng.choice([-1, 1]) * (w / 2 + 2.0))
+        if building_at(px_, py_, 0.3) is None:
+            put(rng.choice(PEOPLE), px_, py_, LAYER['pavement2'], 1.0, rng.uniform(0, 6.28))
+            st('street_people')
+
+# ---- 8. Columbus Circle and Grand Army Plaza ---------------------------------------------------------------
+COL = next(
+    (
+        (p['x'], p['y'])
+        for p in F['points']
+        if p['tags'].get('name') == 'Christopher Columbus' and p['kind'] == 'artwork' and not in_park(p['x'], p['y'])
+    ),
+    None,
+)
+if COL and abs(COL[0]) < BOARD and abs(COL[1]) < BOARD:
+    cx, cy = COL
+    g = ground(cx, cy)
+    kit.surface('flagstone', cx, cy, 50, 50)
+    cylinder('grey', cx, cy, g, 4.0, 6.0)
+    cylinder('grey', cx, cy, g + 4.0, 21.0, 2.4)
+    cylinder('grey', cx, cy, g + 25.0, 1.0, 3.2)
+    add(STATUE, cx, cy, g + 26.0, 2, 2, 2, rng.uniform(0, 6.28))
+    for d in (16.0, 24.0):
+        cylinder('grey', cx, cy, g + 0.1, 0.7, d)
+    for j in range(-3, 4):
+        for i in range(-3, 4):
+            if 3.5 < math.hypot(i * 4, j * 4) < 11.5:
+                add(WATER, cx + i * 4, cy + j * 4, g + 0.7, 1, 1, 1)
+    for q in range(24):
+        a_ = q / 24 * 6.283
+        put(rng.choice(PEOPLE), cx + 14 * math.cos(a_), cy + 14 * math.sin(a_), LAYER['flagstone'], 1.0, a_ + math.pi)
+    st('columbus_circle')
+GAP = sorted(
+    (p for p in F['polys'] if p['tags'].get('name') == 'Grand Army Plaza'), key=lambda p: centroid(p['pts'])[1]
+)
+if len(GAP) >= 2:
+    for p in GAP:
+        for q, (rx, ry, lx, ly, th) in enumerate(fill_rects(p['pts'], 8)):
+            kit.surface('flagstone', rx, ry, lx, ly, th, q)
+    nx_, ny_ = centroid(GAP[0]['pts'])
+    sx_, sy_ = centroid(GAP[1]['pts'])
+    gN, gS = ground(nx_, ny_) + LAYER['flagstone'], ground(sx_, sy_) + LAYER['flagstone']
+    box('grey', nx_, ny_, gN, 3.0, 5, 5)
+    add(STATUE, nx_, ny_, gN + 3.0, 2.2, 2.2, 2.2, math.pi / 2)
+    cylinder('grey', sx_, sy_, gS - 0.1, 0.8, 24.0)
+    cylinder('grey', sx_, sy_, gS, 2.5, 6.0)
+    cylinder('grey', sx_, sy_, gS + 2.5, 2.0, 3.5)
+    cylinder('grey', sx_, sy_, gS + 4.5, 3.0, 1.0)
+    add(STATUE, sx_, sy_, gS + 7.5, 1.4, 1.4, 1.4, 0)
+    for j in range(-3, 4):
+        for i in range(-3, 4):
+            if math.hypot(i * 4, j * 4) < 11:
+                add(WATER, sx_ + i * 4, sy_ + j * 4, gS + 0.65, 1, 1, 1)
+    for q in range(30):
+        put(
+            rng.choice(PEOPLE),
+            sx_ + rng.uniform(-18, 18),
+            sy_ + rng.uniform(-18, 18),
+            LAYER['flagstone'],
+            1.0,
+            rng.uniform(0, 6.28),
+        )
+    st('grand_army_plaza')
 
 
-# ---- 9. Imagine mosaic decal (ground) -----------------------------------------------------
+# ---- 9. Imagine mosaic decal (ground) ----------------------------------------------------------------------
 def imagine_png(path):
-    """Render the Imagine mosaic as a 512 px PNG: a cream disc with 8 concentric rings, 36 radial lines from a
-    quarter radius outwards and the word IMAGINE (Georgia if the macOS font is there, else Pillow's default)
-    on a cream band across the middle. Transparent outside the disc. Needs Pillow."""
+    """The Strawberry Fields mosaic as a 512 px decal: concentric rings, radial joints, IMAGINE across the middle."""
     from PIL import Image, ImageDraw, ImageFont
 
     S = 512
@@ -1200,13 +1288,13 @@ def imagine_png(path):
         rr = r0 * q / 9
         d.ellipse((S / 2 - rr, S / 2 - rr, S / 2 + rr, S / 2 + rr), outline=(60, 60, 60, 255), width=3)
     for q in range(36):
-        a = q / 36 * 6.283
+        a_ = q / 36 * 6.283
         d.line(
             (
-                S / 2 + r0 * 0.25 * math.cos(a),
-                S / 2 + r0 * 0.25 * math.sin(a),
-                S / 2 + r0 * math.cos(a),
-                S / 2 + r0 * math.sin(a),
+                S / 2 + r0 * 0.25 * math.cos(a_),
+                S / 2 + r0 * 0.25 * math.sin(a_),
+                S / 2 + r0 * math.cos(a_),
+                S / 2 + r0 * math.sin(a_),
             ),
             fill=(60, 60, 60, 255),
             width=2,
@@ -1224,10 +1312,6 @@ def imagine_png(path):
     img.save(path)
 
 
-# Ground decal: the same basis rule as the walls turned onto the pavement, X = (0, 0, -1) straight down into the
-# ground, Y = world +Y, Z = X x Y = world +X; the projection box (depth scale 1.0) is centred 0.5 m up so it
-# reaches the plaza surface, and 0.65 x 0.65 (x 4 m) gives a 2.6 m mosaic. Different prefix from the window
-# decals so the names cannot collide.
 if WITH_WINDOWS:
     name = 'decal_1791400002-' + hashlib.md5(b'imagine').hexdigest().upper() + '.png'
     decal_files[name] = ('imagine',)
@@ -1235,40 +1319,33 @@ if WITH_WINDOWS:
         name,
         IMX,
         IMY,
-        Z0 + 0.5,
+        ground(IMX, IMY) + LAYER['flagstone'] + 0.5,
         1.0,
         0.65,
         0.65,
         rot=quat_from_axes((0.0, 0.0, -1.0), (0.0, 1.0, 0.0), (1.0, 0.0, 0.0)),
         store=decal_rows,
     )
-# ---- output ------------------------------------------------------------------------------
-# north_yaw: direction of true north in the local frame (CustomWeather.northyaw), from a point 0.001 deg north of
-# the origin. Menu camera: 420 m south of the origin (+Y), 95 m up, yaw -90 (looking along -Y) and pitched down
-# at the origin.
+
+# ---- output ---------------------------------------------------------------------------------------------------
 north = FR.xy(FRAME['lat0'] + 0.001, FRAME['lon0'])
 north_yaw = math.degrees(math.atan2(north[1], north[0]))
-cam = (0.0, 420.0, 95.0)
+cam = (0.0, 420.0, G0 + 95.0)
 cam_yaw = -90.0
-cam_pitch = math.degrees(math.atan2(0 - cam[2], 420))
+cam_pitch = math.degrees(math.atan2(G0 - cam[2], 420))
 
 
 def thumbnail(path):
-    """Top-down 1024 px JPEG of the south 2 km of the map (y -1600..400) from the OSM polygons and in-park paths.
-
-    Screen x = -x (so east is on the right: local +X is west) and screen y grows with local y (south down).
-    Kinds are painted in a fixed order so water and buildings end up on top of the park and lawns. Needs Pillow.
-    """
+    """Top-down thumbnail from the OSM features."""
     from PIL import Image, ImageDraw
 
     W = 1024
-    img = Image.new('RGB', (W, W), (235, 232, 224))
+    img = Image.new('RGB', (W, W), (150, 190, 130))
     d = ImageDraw.Draw(img)
-    sc = W / 2000
+    sc = W / 2400
 
     def px(x, y):
-        """Local metres -> image pixels (x mirrored, window centred on y = -600)."""
-        return (W / 2 - x * sc, W / 2 + (y + 600) * sc)
+        return (W / 2 - x * sc, W / 2 + y * sc)
 
     col = dict(
         water=(120, 170, 230),
@@ -1277,7 +1354,7 @@ def thumbnail(path):
         building=(110, 110, 120),
         plaza=(200, 195, 185),
         rock=(160, 150, 140),
-        park=(170, 205, 150),
+        park=(135, 185, 115),
     )
     for k in ('park', 'grass', 'wood', 'rock', 'plaza', 'water', 'building'):
         for p in F['polys']:
@@ -1290,28 +1367,23 @@ def thumbnail(path):
     img.save(path, quality=88)
 
 
-# Map JSON (format in the README): one S_AssetsTransform entry per row with all its transforms; freestyle map
-# (Track false in .info) so the empty Race block is ignored and the drone spawns at the board's PlayerStart;
-# timeOfDay 16 = late afternoon light, Cloud 0.2 (empirical). Decal rows join only with windows enabled.
 rows_all = dict(instances)
 rows_all.update(decal_rows if WITH_WINDOWS else {})
 map_json = {
     'S_AssetsTransform': [dict(Rname=r, Transform=t, UniqueGroupTag=['None'] * len(t)) for r, t in rows_all.items()],
-    'BaseMapRow': 'BaseBoard',
+    'BaseMapRow': BASE,
     'WeatherIndex': 0,
     'Race': dict(CheckPoints=[], StartTransform=tf(0, 0, 0, dict(X=0, Y=0, Z=0, W=1)), Laps=1, BestTime=-1, Spoints=[]),
     'CamLoc': tf(cam[0], cam[1], cam[2], quat_pitch_yaw(cam_pitch, cam_yaw)),
     'CustomWeather': dict(timeOfDay=16.0, northyaw=round(north_yaw, 2), Cloud=0.2),
 }
 info = {
-    'BaseMapRow': 'BaseBoard',
+    'BaseMapRow': BASE,
     'Name': DISPLAY,
     'CreatorSteamID': STEAM_ID,
     'CreationTimeUnix': int(time.time()),
     'Track': False,
 }
-# write maps/CentralPark/ fresh, render the decal PNGs into its Decals/ folder and copy them into the editor's two
-# decal libraries, draw the thumbnail, then replace the game's copy of the map folder
 out = os.path.join(ROOT, 'maps', NAME)
 if os.path.isdir(out):
     shutil.rmtree(out)

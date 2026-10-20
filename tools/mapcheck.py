@@ -64,6 +64,8 @@ def run(data, land, struct_rows=(), verbose=True):
     """
     obbs = [o for o in raceline.load_obbs(data)]
     # supports: top faces (z) of every upright box, indexed by 10 m cell
+    # supports: every upright box, indexed into every 10 m cell its footprint covers (so a long deck or a wide
+    # building supports props anywhere on it); stored as a rotated rectangle for an exact containment test
     tops = {}
     recs = []
     for a in data['S_AssetsTransform']:
@@ -74,12 +76,33 @@ def run(data, land, struct_rows=(), verbose=True):
             if not upright(t):
                 continue
             o = raceline.OBB(a['Rname'], t, info)
-            # Upright, so the scaled local Z bounds are the world bottom/top; rx is the larger horizontal half-extent.
             bot = o.T[2] + (o.o[2] - o.e[2]) * o.S[2]
             top = o.T[2] + (o.o[2] + o.e[2]) * o.S[2]
-            rx = max(o.e[0] * abs(o.S[0]), o.e[1] * abs(o.S[1]))
+            hx, hy = o.e[0] * abs(o.S[0]), o.e[1] * abs(o.S[1])
+            ox, oy = o.o[0] * o.S[0], o.o[1] * o.S[1]
+            yaw = raceline.yaw_of(t['Rotation']) * math.pi / 180
+            cxr = o.T[0] + ox * math.cos(yaw) - oy * math.sin(yaw)
+            cyr = o.T[1] + ox * math.sin(yaw) + oy * math.cos(yaw)
+            rx = max(hx, hy)
             recs.append((o.row, o.T[0], o.T[1], bot, top, rx))
-            tops.setdefault((int(o.T[0] // 10), int(o.T[1] // 10)), []).append((o.T[0], o.T[1], top, rx))
+            sup = (cxr, cyr, hx, hy, yaw, top, bot)
+            for gx in range(int((cxr - rx) // 10), int((cxr + rx) // 10) + 1):
+                for gy in range(int((cyr - rx) // 10), int((cyr + rx) // 10) + 1):
+                    tops.setdefault((gx, gy), []).append(sup)
+
+    def supported(x, y, bot, rx):
+        """True when some support's top is within 0.45 m under the prop's bottom (or the prop is embedded in it) and
+        the prop's centre lies inside that support's rotated footprint grown by half the prop's size."""
+        for sx, sy, hx, hy, yaw, stop, sbot in tops.get((int(x // 10), int(y // 10)), []):
+            if not (abs(stop - bot) < 0.45 or (sbot - 0.05 < bot < stop)):
+                continue
+            c, s_ = math.cos(yaw), math.sin(yaw)
+            u = (x - sx) * c + (y - sy) * s_
+            v = -(x - sx) * s_ + (y - sy) * c
+            if abs(u) <= hx + rx * 0.6 and abs(v) <= hy + rx * 0.6:
+                return True
+        return False
+
     floaters = {}
     buried = {}
     off = 0
@@ -92,21 +115,7 @@ def run(data, land, struct_rows=(), verbose=True):
             continue
         g = h / 100
         if bot - g > 0.3:
-            # Look for a top face just under this bottom in the 3x3 block of 10 m cells around the prop.
-            supported = False
-            for cx in (int(x // 10) - 1, int(x // 10), int(x // 10) + 1):
-                for cy in (int(y // 10) - 1, int(y // 10), int(y // 10) + 1):
-                    for sx, sy, stop, srx in tops.get((cx, cy), []):
-                        # Vertical match within 0.45 m; horizontal overlap uses the support's half-extent plus half
-                        # the prop's, so a prop may overhang the edge of what it sits on (empirical).
-                        if abs(stop - bot) < 0.45 and math.hypot(sx - x, sy - y) < srx + rx * 0.5:
-                            supported = True
-                            break
-                    if supported:
-                        break
-                if supported:
-                    break
-            if not supported:
+            if not supported(x, y, bot, rx):
                 floaters.setdefault(row, []).append((round(x), round(y), round(bot - g, 1)))
         if top < g - 0.2:
             buried.setdefault(row, []).append((round(x), round(y), round(g - top, 1)))
