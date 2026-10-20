@@ -39,6 +39,7 @@ CUBE = dict(
     black="NewRow_109",
 )
 CONCRETE, BRICK = "NewRow_303", "NewRow_318"
+CYL = dict(default="NewRow_14", grey="NewRow_261", black="NewRow_113", yellow="NewRow_64", red="NewRow_89")  # cylinders, centre pivot
 ARCH = "NewRow_45"  # SM_NeoArch_ME 7.0 x 1.5 x 9.9 m, base pivot: a real stone arch
 STAIR_A = "NewRow_787"  # SM_Stair_A 3.6 x 8.6 x 5.7 m: a real flight of stairs (pivot at one side of the foot)
 STAIR_RISE = 5.3  # m from the stair's base to its top landing (its bounds dip 0.37 m below the pivot)

@@ -145,7 +145,34 @@ contributors, ODbL.
 The tools are formatted with [ruff](https://docs.astral.sh/ruff/) (`python3 -m ruff format tools`, settings in
 `pyproject.toml`, 120 columns). Run it before committing.
 
-## How the map is built
+## Parts library: how every map is built now
+
+Maps are stitched from **parts**, not placed object by object. The rule is that a part which passed the showroom
+and the tests renders identically in every map, because everything goes through the same `Scene`.
+
+| file | role |
+|------|------|
+| `tools/scene.py` | the one object a map is built into: base level and ground sampler, instance store, occupancy grid (path / road / sidewalk / water / building / bridge), keep-clear zones, the `add` / `place` / `box` / `plane` / `put` primitives, the writer (`maps/<Name>/` plus the game's `MapEditor/User/<Name>/`) and the checks (floaters, buried, off-landscape, take-off clearance) |
+| `tools/mapkit.py` | asset-first recipes bound to a scene: surfaces on height bands, walls and fences from panels, oriented benches, kiosks, vehicles aligned from the catalogue, stairs, bridges, basins, mesh-first buildings; `place()` positions a mesh by its bounding box because several meshes have corner or end pivots |
+| `tools/prefabs.py` | the parts: `road` (carriageway, lane dashes, kerbs, sidewalks, lamps, bins, walkers, cars in lanes), `path` (with furniture), `road_cut` (walled sunken road with at-grade junctions for drives and straight footbridges for paths), `footbridge`, `pond`, `fountain`, `plaza`, `kiosks`, `playground`, `gazebo`, `cafe`, `terrace`, `statue`; each with a demo in `DEMOS` |
+| `tools/showroom.py` | lays every demo on a grid in a ~700-object map that loads in seconds, and prints a `tools/setcam.py` line per demo to point the editor camera at it |
+| `tools/test_prefabs.py` | builds every demo on a flat scene and checks it by geometry (cars inside the asphalt, walkers and furniture off the carriageway, stair landings meeting decks, water inside basins, nothing floating or outside the footprint) plus a golden hash in `data/prefab_golden.json` so any change in a part's output is noticed |
+| `tools/setcam.py` | `setcam <Map> x y z yaw pitch` points a map's editor camera for in-game screenshots |
+
+Workflow for a new or changed part: write it in `prefabs.py` with a demo, run `python3 tools/test_prefabs.py`,
+run `python3 tools/showroom.py`, open the Showroom in the track editor and look at it, then `--update` the golden
+hash. Only then does a map builder call it. Workflow for a new map: a builder that loads its mapped geometry
+(OpenStreetMap, city data, a design) and calls parts along it, then `sc.write()` and `sc.check()`.
+
+Measured rules the parts encode (each was a visible bug first): vehicle long axes come from the catalogue bounds
+(the van is long on Y, the cars on X) and a vehicle is refused off the asphalt; a bridge is straight along the
+chord of the path it carries, its deck spans just the cut, its stairs (paths under 6 m) or ramps (wider ways)
+land where the path was cut back, and nothing is placed on its footprint; a road cut keeps its carriageway
+continuous under every bridge and breaks its walls where a drive crosses at grade; fountain water sits inside a
+solid masonry ring below the rim; benches run along their path with the seat facing it; no prop goes inside a
+keep-clear zone (the spawn needs 1 m of open air in every direction).
+
+## How the NYC map is built (first generation, before the parts library)
 
 - The **Empty board** base level (`BaseMapRow: BaseBoard`) is a flat 6 km landscape at Z = 0.
 - Freestyle maps (`Track: false`) ignore `Race.StartTransform`; the drone spawns at the base level's PlayerStart,
@@ -272,10 +299,7 @@ pivot, so the cube is placed by its centre, the brick wall by its base and the c
 | `tools/uasset.py` | reads cooked UE4.27 `.uasset`/`.uexp`: names, imports, exports, tagged properties, DataTable rows |
 | `tools/build_catalog.py` | dumps `DT_MapEditorAssets` and reads each mesh's bounds into `data/catalog.json` |
 | `tools/build_nyc.py` | builds and installs the NYC map |
-| `tools/mapkit.py` | asset-first recipes shared by every builder: surfaces, walls, benches, vehicles, stairs, bridges, basins; `place()` positions a mesh by its bounding box (several meshes have corner or end pivots) |
-| `tools/prefabs.py` | composite objects built from recipes (road with traffic, road cut with footbridge, stone and wooden footbridges, fountain basin, shoreline, path with furniture, kiosks, playground, gazebo, cafe, terrace, statue, probe) |
-| `tools/showroom.py` | lays every prefab on a grid in a 400-object map that loads in seconds, so each prefab is checked in the game before a map uses it |
-| `tools/setcam.py` | points a map's editor camera at a spot for in-game screenshots |
+| `tools/scene.py`, `tools/mapkit.py`, `tools/prefabs.py`, `tools/showroom.py`, `tools/test_prefabs.py`, `tools/setcam.py` | the parts library, see above |
 
 Extracted game assets are ignored by git; everything in `data/` that is committed is either public data
 or metadata derived from the game.
