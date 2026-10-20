@@ -14,3 +14,7 @@ maps/*/preview.png
 maps/*/topdown.png
 # local agent config
 .claude/
+# unreleased maps
+maps/FPVPark/
+maps/FPVParkRookie/
+data/fpv_airspace_icon.png
