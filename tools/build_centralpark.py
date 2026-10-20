@@ -3,8 +3,9 @@
 
 Why this base level: it is the only one with a real grass ground (the Empty board is a numbered grid and Bp_Grass
 renders grey on macOS), it is flat to within 2 m, and its 2.42 km board matches the game's 2.2 km flight box. The
-frame (data/centralpark_frame.json) puts the world origin on the Mall at Bethesda Terrace with the Mall running down
-+Y, so the spawn (the level's PlayerStart at the origin, facing -Y) looks north over the fountain and the Lake, and
+frame (data/centralpark_frame.json) puts the world origin on the Bethesda fountain plaza, 12 m out of the arcade's
+north mouth, so the spawn (the level's PlayerStart at the origin, facing -Y) stands on open flagstone looking at the
+Angel fountain and the Lake with nothing within 5 m of it, and
 the board covers the park from Central Park South to the Great Lawn plus Midtown to about 56th Street.
 
 Data: data/centralpark_features.json from tools/osm.py (polygons: water with islands, lawns, woods, rock, plazas,
@@ -210,7 +211,7 @@ def plane(row, x, y, z_top, lx, ly, yaw=0.0):
 def put(row, x, y, dz=0.0, s=1.0, yaw=0.0):
     """Place a row on the terrain at its own position, lifted by dz and the catalogue rest correction."""
     h = gz(x, y)
-    if h is None:
+    if h is None or math.hypot(x, y) < 5.0:  # the spawn (origin) must stay clear: no trees, people or props on it
         return
     add(row, x, y, h + dz + rest(row) * s, s, s, s, yaw)
 
@@ -636,9 +637,11 @@ for l in F['lines']:
     st('step_rails')
 
 # ---- 3. the Mall, Bethesda Terrace and the Angel fountain ---------------------------------------------------
-MALL_Y0, MALL_Y1 = 400.0, 40.0  # the Mall runs from the Literary Walk (+Y) up to the Terrace at the origin
-kit.ribbon([(0, MALL_Y0), (0, MALL_Y1)], 12.0, 'flagstone')
-mark_line([(0, MALL_Y0), (0, MALL_Y1)], 12, 1)
+_arc = next(l for l in F['lines'] if l['tags'].get('name') == 'Bethesda Arcade')
+_south = max(_arc['pts'][0], _arc['pts'][-1], key=lambda q: q[1])  # the Mall meets the arcade at its south mouth
+MALL_X, MALL_Y1, MALL_Y0 = _south[0], _south[1] + 9.0, _south[1] + 370.0  # the Mall runs from the Literary Walk (+Y) up to the Terrace
+kit.ribbon([(MALL_X, MALL_Y0), (MALL_X, MALL_Y1)], 12.0, 'flagstone')
+mark_line([(MALL_X, MALL_Y0), (MALL_X, MALL_Y1)], 12, 1)
 for y in range(int(MALL_Y1), int(MALL_Y0), 12):
     for x in (-8.5, 8.5, -16.5, 16.5):
         s = rng.uniform(1.15, 1.45)
@@ -651,11 +654,11 @@ for y in range(int(MALL_Y1), int(MALL_Y0), 12):
             rng.uniform(0, 6.28),
         )
         st('mall_elms')
-    kit.bench(-6.6, y + 6, -math.pi / 2, -1)  # the walk runs toward -Y; a bench on each side faces it
-    kit.bench(6.6, y + 6, -math.pi / 2, 1)
+    kit.bench(MALL_X - 6.6, y + 6, -math.pi / 2, -1)  # the walk runs toward -Y; a bench on each side faces it
+    kit.bench(MALL_X + 6.6, y + 6, -math.pi / 2, 1)
     if (y // 12) % 3 == 0:
         for x in (-7.2, 7.2):
-            put(LAMP_SHORT, x, y + 1, 0, 1.0, 0)
+            put(LAMP_SHORT, MALL_X + x, y + 1, 0, 1.0, 0)
             st('lamps')
 for nm, x, y in [
     (p['tags']['name'], p['x'], p['y'])
@@ -669,18 +672,19 @@ for nm, x, y in [
 ARC = next(l for l in F['lines'] if l['tags'].get('name') == 'Bethesda Arcade')
 (ax0, ay0), (ax1, ay1) = ARC['pts'][0], ARC['pts'][-1]
 acx, acy = (ax0 + ax1) / 2, (ay0 + ay1) / 2
-ayaw = math.atan2(ay1 - ay0, ax1 - ax0)
+ayaw = math.atan2(ay1 - ay0, ax1 - ax0)  # along the arcade; north (-Y) is the +u direction when ay1 < ay0
+un = 1 if ay1 < ay0 else -1
 gA = ground(acx, acy)
-box('concrete', acx, acy, gA + 4.0, 0.6, 16, 70, ayaw)
+box('concrete', acx, acy, gA + 4.0, 0.6, 16, 70, ayaw)  # Terrace Drive deck: 16 m thick along the arcade, 70 m across
 kit.surface('asphalt', acx, acy, 12, 70, ayaw, z_base=gA + 4.6)
 for sgn in (-1, 1):
-    kit.wall(
-        [l2w(acx, acy, ayaw, sgn * 7.5, -35), l2w(acx, acy, ayaw, sgn * 7.5, 35)], 'retaining', 4.0
-    )  # the arcade: a 15 m passage under the drive
+    kit.wall([l2w(acx, acy, ayaw, -8, sgn * 7.5), l2w(acx, acy, ayaw, 8, sgn * 7.5)], 'retaining', 4.0)  # the arcade: a 15 m passage under the drive
+    for side in (-1, 1):  # the embankment faces either side of the passage mouth
+        kit.wall([l2w(acx, acy, ayaw, sgn * 8, side * 7.5), l2w(acx, acy, ayaw, sgn * 8, side * 35)], 'retaining', 4.0)
     kit._raised_parapet([l2w(acx, acy, ayaw, sgn * 7.0, -34), l2w(acx, acy, ayaw, sgn * 7.0, 34)], gA + 4.6)
-    fx_, fy_ = l2w(acx, acy, ayaw, sgn * 20, -12)
-    kit.stairs(fx_, fy_, ayaw + (0.0 if sgn < 0 else math.pi), 4.4, 8.0)
-FX, FY = l2w(acx, acy, ayaw, 0, -48)
+    fx_, fy_ = l2w(acx, acy, ayaw, un * 20, sgn * 14)  # twin stairs on the Lake side, climbing back up to the drive
+    kit.stairs(fx_, fy_, ayaw + (math.pi if un > 0 else 0.0), 4.4, 8.0)
+FX, FY = l2w(acx, acy, ayaw, un * 44, 0)  # the Angel fountain, on the lower terrace between the arcade and the Lake
 kit.surface('flagstone', FX, FY, 70, 60, ayaw)
 mark_poly([l2w(FX, FY, ayaw, u, v) for (u, v) in ((-35, -30), (35, -30), (35, 30), (-35, 30))], 3)
 gF = ground(FX, FY) + LAYER['flagstone']

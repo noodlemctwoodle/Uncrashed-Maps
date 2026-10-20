@@ -120,8 +120,8 @@ the 6 km board is rotated 44° from north and its corners reach 4.2 km.
 OpenStreetMap on the grassy **BaseLandscape02** level: the only base with real grass (the Empty board is a numbered
 grid and Bp_Grass renders grey on Mac), flat to within 2 m, and its board matches the game's 2.2 km flight box. The
 landscape is not centred on the origin (it spans −1209..+806 m on both axes, measured from its heightmap), so the
-frame (`data/centralpark_frame.json`) puts the origin on the Mall at Bethesda Terrace: the spawn looks north over the
-fountain and the Lake, and the map covers the park from Central Park South to the Great Lawn plus Midtown to about
+frame (`data/centralpark_frame.json`) puts the origin on Bethesda's lower terrace, 12 m out of the arcade mouth with
+nothing within 5 m of it: the spawn stands on the flagstones looking north at the Angel fountain and the Lake, and the map covers the park from Central Park South to the Great Lawn plus Midtown to about
 56th Street. `tools/osm.py` turns an Overpass dump (not in the repo) into `data/centralpark_features.json`.
 
 Everything is placed asset-first through `tools/mapkit.py`: the 43 arches and bridges are stone arch portals with a
