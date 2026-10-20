@@ -217,7 +217,7 @@ opening heights, straight legs, start arrow) top-down, `tools/mapcheck.py <map.j
 off-landscape objects, and `tools/bounds_fix.py` completes `data/catalog.json` with bounds for basic shapes and
 blueprint rows (union of their component meshes). `data/gate_bounds.json` holds each gate row's pivot and
 detection-box offset. The heightmap sampler was validated against six player-built Workshop maps on the Mountain
-landscape (ground objects within 0.1 m). The reusable rules live in `.claude/skills/uncrashed-maps/SKILL.md`.
+landscape (ground objects within 0.1 m). The measured conventions (gate yaw, pivots, decal basis, placement rules) are summarised in this README and in the tool docstrings.
 
 ## Map file format (reverse engineered)
 
