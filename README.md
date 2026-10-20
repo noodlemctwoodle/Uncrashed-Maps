@@ -272,6 +272,10 @@ pivot, so the cube is placed by its centre, the brick wall by its base and the c
 | `tools/uasset.py` | reads cooked UE4.27 `.uasset`/`.uexp`: names, imports, exports, tagged properties, DataTable rows |
 | `tools/build_catalog.py` | dumps `DT_MapEditorAssets` and reads each mesh's bounds into `data/catalog.json` |
 | `tools/build_nyc.py` | builds and installs the NYC map |
+| `tools/mapkit.py` | asset-first recipes shared by every builder: surfaces, walls, benches, vehicles, stairs, bridges, basins; `place()` positions a mesh by its bounding box (several meshes have corner or end pivots) |
+| `tools/prefabs.py` | composite objects built from recipes (road with traffic, road cut with footbridge, stone and wooden footbridges, fountain basin, shoreline, path with furniture, kiosks, playground, gazebo, cafe, terrace, statue, probe) |
+| `tools/showroom.py` | lays every prefab on a grid in a 400-object map that loads in seconds, so each prefab is checked in the game before a map uses it |
+| `tools/setcam.py` | points a map's editor camera at a spot for in-game screenshots |
 
 Extracted game assets are ignored by git; everything in `data/` that is committed is either public data
 or metadata derived from the game.

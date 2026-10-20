@@ -497,6 +497,7 @@ def is_transverse(l):
 
 
 path_lines = []  # (pts, width, material, inside, kind, name, bridge)
+ribbons = []  # (pts, width, material): laid after the transverse crossings are known, clipped around footbridges
 for l in F['lines']:
     k, pts = l['kind'], l['pts']
     if k not in PATH_W or len(pts) < 2:
@@ -522,8 +523,8 @@ for l in F['lines']:
         mat = 'asphalt'
     bridge = l['tags'].get('bridge') == 'yes'
     if not bridge:  # bridges are built as arches below, with their own deck
-        kit.ribbon(pts, w, mat, max_piece=32.0)
-    mark_line(pts, w, 1)
+        ribbons.append((pts, w, mat, l['tags'].get('name') or ''))
+    mark_line(pts, w, 6 if mat == 'asphalt' and not bridge else 1)  # 6 = carriageway: the only place for vehicles
     path_lines.append((pts, w, mat, inside, k, l['tags'].get('name') or '', bridge))
     if not inside and k in ('residential', 'tertiary', 'secondary', 'primary') and not LITE:
         for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
@@ -547,6 +548,12 @@ for l in F['lines']:
                 )
 st('path_lines', len(path_lines))
 
+
+def on_road(x, y):
+    """True where the ground is carriageway (asphalt ribbon): vehicles are refused anywhere else."""
+    return occ_at(x, y) == 6
+
+
 # transverse roads: walled trenches (the terrain cannot be dug), so path crossings over them become real overpasses
 TRANSVERSE = [pl for pl in path_lines if 'Transverse' in pl[5] and pl[2] == 'asphalt' and pl[1] >= 11]
 
@@ -565,27 +572,167 @@ def near_transverse(x, y, d=10.0):
     return False
 
 
+TRANSVERSE_WALL_H = 3.6
+
+
+def seg_cross(a, b, c, d):
+    """Intersection point of segments a-b and c-d, or None."""
+    (x1, y1), (x2, y2), (x3, y3), (x4, y4) = a, b, c, d
+    den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if abs(den) < 1e-9:
+        return None
+    t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den
+    u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / den
+    return (x1 + t * (x2 - x1), y1 + t * (y2 - y1)) if 0 <= t <= 1 and 0 <= u <= 1 else None
+
+
+def simplify(pts, tol=0.25):
+    """Douglas-Peucker: drop the vertices of a sampled polyline that stay within `tol` m of a straight line."""
+    if len(pts) < 3:
+        return list(pts)
+    (x0, y0), (x1, y1) = pts[0], pts[-1]
+    L = math.hypot(x1 - x0, y1 - y0) or 1e-9
+    worst, wi = 0.0, 0
+    for i, (x, y) in enumerate(pts[1:-1], 1):
+        d = abs((x1 - x0) * (y0 - y) - (x0 - x) * (y1 - y0)) / L
+        if d > worst:
+            worst, wi = d, i
+    if worst <= tol:
+        return [pts[0], pts[-1]]
+    return simplify(pts[: wi + 1], tol)[:-1] + simplify(pts[wi:], tol)
+
+
+def clip_polyline(pts, blockers):
+    """Split a polyline into the parts outside every (x, y, r) circle. Polylines that never come near a circle
+    are returned untouched; the others are sampled at 1 m, cut, and simplified back to a few vertices (a vertex
+    per metre would mean a ground plane per metre)."""
+    near = [b for b in blockers if any(math.hypot(x - b[0], y - b[1]) < b[2] + 40 for (x, y) in pts)]
+    if not near:
+        return [pts]
+    out, run = [], []
+    for x, y, yaw, dist in along_line(pts, 1.0):
+        if any(math.hypot(x - bx, y - by) < br for (bx, by, br) in near):
+            if len(run) > 1:
+                out.append(simplify(run))
+            run = []
+        else:
+            run.append((x, y))
+    if len(run) > 1:
+        out.append(simplify(run))
+    return out
+
+
+# Every place a mapped way crosses a transverse centreline. In the real park the transverses are sunk and the
+# ways pass over them; the terrain here cannot be dug, so the transverse is a walled cut at grade and:
+#   - a drive crossing it is an at-grade junction: the walls stop either side of the drive (no bridge, no ramps)
+#   - a footpath crossing it gets the verified footbridge recipe (deck spanning just the cut, stairs in line),
+#     its ribbon is cut back to the stair feet and nothing is placed on the bridge footprint (occupancy 8)
+STAIR_RUN = 8.61 * (TRANSVERSE_WALL_H + 1.6) / 5.3  # SM_Stair_A run at the bridge's rise
+junctions, foot_crossings = [], []  # (x, y, yaw of the crossing way, way width)
+for tpts, tw, tmat, tin, tk, tnm, tbr in TRANSVERSE:
+    for pts, w, mat, inside, k, nm, bridge in path_lines:
+        if not inside or 'Transverse' in nm:
+            continue
+        for a, b in zip(tpts, tpts[1:]):
+            for c, d in zip(pts, pts[1:]):
+                P = seg_cross(a, b, c, d)
+                if P is None or not in_park(*P):
+                    continue
+                rec = (P[0], P[1], math.atan2(d[1] - c[1], d[0] - c[0]), w, pts)
+                (junctions if (mat == 'asphalt' and w >= 8) else foot_crossings).append(rec)
+
+
+def dedupe(recs, r):
+    kept = []
+    for rec in sorted(recs, key=lambda q: -q[3]):  # widest first
+        if not any(math.hypot(rec[0] - kx, rec[1] - ky) < r for (kx, ky, *_) in kept):
+            kept.append(rec)
+    return kept
+
+
+def points_at(pts, P, R):
+    """The two points of a polyline R metres along it either side of P (the polyline's nearest sample to P)."""
+    samples = [(x, y, dist) for x, y, yaw, dist in along_line(pts, 0.5)]
+    _, _, d0 = min(samples, key=lambda q: math.hypot(q[0] - P[0], q[1] - P[1]))
+    a_ = min(samples, key=lambda q: abs(q[2] - (d0 - R)))
+    b_ = min(samples, key=lambda q: abs(q[2] - (d0 + R)))
+    return (a_[0], a_[1]), (b_[0], b_[1])
+
+
+junctions = dedupe(junctions, 12.0)
+foot_crossings = [
+    c
+    for c in dedupe(foot_crossings, 14.0)
+    if not any(math.hypot(c[0] - jx, c[1] - jy) < 16.0 for (jx, jy, *_) in junctions)
+]
+st('transverse_junctions', len(junctions))
+st('transverse_footbridges', len(foot_crossings))
+RAMP_RUN = max(12.0, (TRANSVERSE_WALL_H + 1.6) * 4.0)  # kit.bridge's ramp length at this rise
+
+
+def approach_run(w):
+    """Narrow footpaths climb real stairs; wide ways (car-free drives, promenades) get ramps."""
+    return STAIR_RUN if w < 6.0 else RAMP_RUN
+
+
+# A bridge is straight, so it cannot follow a path that bends over the cut: its axis is the chord between the
+# two points where the path is cut back (the approach feet), the deck stays centred on the cut, and a short
+# straight link joins each cut path end to its approach foot.
+BRIDGE_LEN = 12.0 + 1.6 + 3.0
+bridge_blockers, bridge_links = [], []
+straight = []
+for x, y, yaw, w, pts in foot_crossings:
+    R = BRIDGE_LEN / 2 + approach_run(w)
+    A, B = points_at(pts, (x, y), R)
+    yaw = math.atan2(B[1] - A[1], B[0] - A[0])
+    fa, fb = l2w(x, y, yaw, -R, 0), l2w(x, y, yaw, R, 0)
+    if math.hypot(A[0] - fb[0], A[1] - fb[1]) < math.hypot(A[0] - fa[0], A[1] - fa[1]):
+        fa, fb = fb, fa
+    for end, foot in ((A, fa), (B, fb)):
+        if math.hypot(end[0] - foot[0], end[1] - foot[1]) > 0.3:
+            bridge_links.append(([end, foot], w))
+    bridge_blockers.append((x, y, R))
+    straight.append((x, y, yaw, w))
+foot_crossings = straight
+for pts, w, mat, nm in ribbons:  # lay every path now; the ways that cross a transverse are cut back to the
+    # footbridge approaches, the transverse's own carriageway is never cut (the road must run under the bridge)
+    clip = bridge_blockers and 'Transverse' not in nm and mat != 'asphalt'
+    for part in clip_polyline(pts, bridge_blockers) if clip else [pts]:
+        kit.ribbon(part, w, mat, max_piece=32.0)
+for link, w in bridge_links:  # straight links from the cut path ends to the approach feet
+    kit.ribbon(link, w, 'pavement')
+for x, y, yaw, w in foot_crossings:
+    kit.bridge(
+        x,
+        y,
+        BRIDGE_LEN,
+        w + 0.6,
+        yaw,
+        clear_h=TRANSVERSE_WALL_H + 1.0,
+        deck='flagstone',
+        stairs=w < 6.0,
+        span=12.0 + 5.0,
+        name='transverse crossing',
+    )
+    run = approach_run(w)
+    for u in range(-int(BRIDGE_LEN / 2 + run) - 1, int(BRIDGE_LEN / 2 + run) + 2):  # footprint: nothing else here
+        for v in range(-int(w / 2) - 2, int(w / 2) + 3):
+            mark(*l2w(x, y, yaw, u, v), 8)
 for pts, w, mat, inside, k, nm, bridge in TRANSVERSE:
+    gaps = [(jx, jy, jw / 2 + 1.5) for (jx, jy, _, jw, _) in junctions]
     for sgn in (-1, 1):
         for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
             yaw = math.atan2(y1 - y0, x1 - x0)
-            if in_park((x0 + x1) / 2, (y0 + y1) / 2):
-                kit.wall(
-                    [l2w(x0, y0, yaw, 0, sgn * (w / 2 + 0.8)), l2w(x1, y1, yaw, 0, sgn * (w / 2 + 0.8))],
-                    'retaining',
-                    3.6,
-                )
+            if not in_park((x0 + x1) / 2, (y0 + y1) / 2):
+                continue
+            line = [l2w(x0, y0, yaw, 0, sgn * (w / 2 + 0.8)), l2w(x1, y1, yaw, 0, sgn * (w / 2 + 0.8))]
+            for part in clip_polyline(line, gaps) if gaps else [line]:
+                kit.wall(part, 'retaining', TRANSVERSE_WALL_H)
                 st('transverse_walls')
     for x, y, yaw, dist in along_line(pts, 45):
         if in_park(x, y):
-            put(
-                rng.choice(CARS),
-                *l2w(x, y, yaw, 0, rng.choice([-3.0, 3.0])),
-                LAYER['asphalt'],
-                1.0,
-                yaw + (0 if rng.random() < 0.5 else math.pi),
-            )
-            st('cars')
+            lane = rng.choice([-3.0, 3.0])
+            kit.vehicle(rng.choice(CARS), x, y, yaw + (0 if lane > 0 else math.pi), on_road, 3.0)
 
 # arches: every bridge with a mapped outline, then every bridge-tagged path segment without one
 arch_centres = []
@@ -593,6 +740,8 @@ for l in F['lines']:
     if l['kind'] != 'bridge' or len(l['pts']) < 4 or not in_park(*l['pts'][0]):
         continue
     cx, cy, lx, ly, th = min_rect(l['pts'])
+    if near_transverse(cx, cy, 16.0):  # transverse crossings are built above from the crossing points
+        continue
     L, W = (lx, ly) if lx >= ly else (ly, lx)
     th = th if lx >= ly else th + math.pi / 2
     nm = l['tags'].get('name') or ''
@@ -610,6 +759,7 @@ for l in F['lines']:
             4.8 if near_transverse(cx, cy) else 3.4,
             deck='wood' if 'Bow' in nm else 'flagstone',
             name=nm,
+            span=18.0 if near_transverse(cx, cy) else None,
         )
     arch_centres.append((cx, cy))
 for l in F['lines']:
@@ -628,9 +778,11 @@ for l in F['lines']:
     (x0, y0), (x1, y1) = pts[0], pts[-1]
     L = math.hypot(x1 - x0, y1 - y0)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    if L < 6 or any(math.hypot(cx - ox, cy - oy) < 14 for (ox, oy) in arch_centres):
+    if near_transverse(cx, cy, 16.0):
         continue
-    W = (parse_width(l['tags'].get('width')) or PATH_W.get(l['kind'], 3.6)) + 1.0
+    if L < 6 or any(math.hypot(cx - ox, cy - oy) < 18 for (ox, oy) in arch_centres):
+        continue
+    W = (parse_width(l['tags'].get('width')) or PATH_W.get(l['kind'], 3.6)) + 0.6
     if L < 14 and 'Arch' not in (l['tags'].get('name') or '') and not near_transverse(cx, cy):
         kit.wooden_bridge(cx, cy, L + 2.0, W, math.atan2(y1 - y0, x1 - x0), 3.0)
     else:
@@ -642,6 +794,7 @@ for l in F['lines']:
             math.atan2(y1 - y0, x1 - x0),
             4.8 if near_transverse(cx, cy) else 3.2,
             name=l['tags'].get('name') or '',
+            span=18.0 if near_transverse(cx, cy) else None,
         )
     arch_centres.append((cx, cy))
 # streams (the Gill, the Loch): a ribbon of water tiles with rocks along the banks
@@ -744,13 +897,7 @@ kit.surface('flagstone', FX, FY, 70, 60, ayaw)
 mark_poly([l2w(FX, FY, ayaw, u, v) for (u, v) in ((-35, -30), (35, -30), (35, 30), (-35, 30))], 3)
 gF = ground(FX, FY) + LAYER['flagstone']
 KEEP_CLEAR.append((FX, FY, 16.5))
-kit.wall(
-    [(FX + 14.5 * math.cos(q / 48 * 6.2832), FY + 14.5 * math.sin(q / 48 * 6.2832)) for q in range(49)], 'brick', 0.75
-)  # the basin: a solid low masonry ring the water sits inside
-for j_ in range(-4, 5):
-    for i_ in range(-4, 5):
-        if math.hypot(i_ * 3, j_ * 3) < 13.5:
-            add(WATER, FX + i_ * 3, FY + j_ * 3, gF + 0.45, 0.75, 0.75, 1)
+kit.basin(FX, FY, 14.5, 0.75, z_base=gF)  # the basin: a solid masonry ring the water sits inside
 cylinder('grey', FX, FY, gF, 3.0, 3.0)
 cylinder('grey', FX, FY, gF + 3.0, 1.0, 6.0)
 cylinder('grey', FX, FY, gF + 4.0, 2.0, 1.2)
@@ -1176,10 +1323,12 @@ for p in F['points']:
             kit.bench(p['x'], p['y'], best[1], best[2])
             st('mapped_benches')
 for pts, w, mat, inside, k, nm, bridge in path_lines:
-    if not inside or bridge:
+    if not inside or bridge or 'Transverse' in nm:  # no benches, bins or walkers inside the transverse trenches
         continue
     drive = mat == 'asphalt' and w >= 11
     for x, y, yaw, dist in along_line(pts, 1.0):
+        if occ_at(x, y) == 8:  # on a transverse footbridge footprint
+            continue
         side = 1 if int(dist / 36) % 2 == 0 else -1
         if dist % 36 < 1 and cell(x, y) not in mapped_lamps:
             put(LAMP_SHORT, *l2w(x, y, yaw, 0, side * (w / 2 + 0.6)), 0, 1.0, yaw + side * math.pi / 2)
@@ -1198,8 +1347,8 @@ for pts, w, mat, inside, k, nm, bridge in path_lines:
             )
             st('people')
         if drive and dist % 70 < 1:
-            put(rng.choice(CARS), *l2w(x, y, yaw, 0, rng.choice([-3.0, 3.0])), LAYER['asphalt'], 1.0, yaw)
-            st('cars')
+            lane = rng.choice([-3.0, 3.0])
+            kit.vehicle(rng.choice(CARS), x, y, yaw + (0 if lane > 0 else math.pi), on_road, 3.0)
 for p in F['polys']:
     nm = p['tags'].get('name') or ''
     if nm == 'Sheep Meadow' or (p['kind'] == 'plaza' and 'Playground' in nm and in_park(*centroid(p['pts']))):
@@ -1277,14 +1426,8 @@ for pts, w, mat, inside, k, nm, bridge in path_lines:
     for x, y, yaw, dist in along_line(pts, 52):
         if building_at(x, y, 0.5) is not None:
             continue
-        put(
-            rng.choice(CARS),
-            *l2w(x, y, yaw, 0, rng.choice([-w / 4, w / 4])),
-            LAYER['asphalt'],
-            1.0,
-            yaw + (0 if rng.random() < 0.5 else math.pi),
-        )
-        st('street_cars')
+        lane = rng.choice([-w / 4, w / 4])
+        kit.vehicle(rng.choice(CARS), x, y, yaw + (0 if lane > 0 else math.pi), on_road, w / 4)
         if int(dist) % 72 < 36:
             for sgn in (-1, 1):
                 lx_, ly_ = l2w(x, y, yaw, 0, sgn * (w / 2 + 1.2))

@@ -40,7 +40,9 @@ CUBE = dict(
 )
 CONCRETE, BRICK = "NewRow_303", "NewRow_318"
 ARCH = "NewRow_45"  # SM_NeoArch_ME 7.0 x 1.5 x 9.9 m, base pivot: a real stone arch
-STAIR_A = "NewRow_787"  # SM_Stair_A 3.6 x 8.6 x 5.7 m: a real flight of stairs
+STAIR_A = "NewRow_787"  # SM_Stair_A 3.6 x 8.6 x 5.7 m: a real flight of stairs (pivot at one side of the foot)
+STAIR_RISE = 5.3  # m from the stair's base to its top landing (its bounds dip 0.37 m below the pivot)
+STAIR_CLIMB = 1  # +1: the mesh climbs toward its local +Y; -1: toward -Y (set from the showroom probe)
 STAIRS_SMALL = "NewRow_106"  # sm_Stairs_01_01 2.4 x 3.9 x 3.7 m
 PARAPET = "NewRow_275"  # SM_parapet_fence_small 0.94 x 0.12 x 0.98 m: stone parapet section
 HANDRAIL = "NewRow_276"  # sm_Handrail_01_01 2.08 m
@@ -144,6 +146,20 @@ class MapKit:
         """Ground-top height at (x, y)."""
         return self._ground(x, y)
 
+    def place(self, row, x, y, z, sx=1.0, sy=1.0, sz=1.0, yaw=0.0):
+        """Place a mesh so that the CENTRE OF ITS BOUNDING BOX stands at (x, y) with its BOTTOM at height z,
+        whatever the mesh's pivot is. Several editor meshes have the pivot at a corner or an end (SM_Stair_A at
+        one side of the foot, SM_Deck_Floor_04 at a corner), so placing their pivot at the centre of a bridge
+        put them metres off it (seen in the game); this helper compensates from the catalogue bounds."""
+        b = CAT.get(row, {}).get("bounds")
+        if not b:
+            self.add(row, x, y, z, sx, sy, sz, yaw)
+            return
+        ox, oy = b["origin"][0] / 100 * sx, b["origin"][1] / 100 * sy  # bbox centre relative to the pivot
+        oz = (b["origin"][2] - b["extent"][2]) / 100 * sz  # bbox bottom relative to the pivot
+        c, s_ = math.cos(yaw), math.sin(yaw)
+        self.add(row, x - (ox * c - oy * s_), y - (ox * s_ + oy * c), z - oz, sx, sy, sz, yaw)
+
     def st(self, k, n=1):
         self.stats[k] = self.stats.get(k, 0) + n
 
@@ -183,6 +199,21 @@ class MapKit:
         self.add(row, x, y, self.g(x, y) + rest(row), 1.0, 1.0, 1.0, yaw)
         self.st("kiosks")
 
+    # ---- vehicles ---------------------------------------------------------------------------------------------
+    def vehicle(self, row, x, y, heading, on_road=None, lane=0.0):
+        """A vehicle on a road: its long axis (from the mesh bounds) is turned to `heading` (radians, the road
+        direction), it is offset `lane` metres to the right, and it is refused unless `on_road(x, y)` says the
+        ground there is carriageway (counted in stats as vehicles_dropped_off_road)."""
+        L, W, H = size(row)
+        px, py = l2w(x, y, heading, 0, -lane)
+        if on_road is not None and not on_road(px, py):
+            self.st("vehicles_dropped_off_road")
+            return False
+        yaw = heading + (math.pi / 2 if W > L else 0.0)  # meshes whose long axis is local Y get a quarter turn
+        self.add(row, px, py, self.g(px, py) + rest(row), 1.0, 1.0, 1.0, yaw)
+        self.st("vehicles")
+        return True
+
     # ---- walls, fences, stairs ---------------------------------------------------------------------------------
     def wall(self, pts, kind="brick", height=None):
         """A wall or fence along a polyline from real sections. kinds: 'retaining' (concrete fence panels),
@@ -215,13 +246,35 @@ class MapKit:
                 self.st("wall_sections")
 
     def stairs(self, x, y, yaw, rise, width=None):
-        """A real flight of stairs (SM_Stair_A, 8.6 m run, 5.7 m rise) scaled to `rise`, climbing along `yaw`
-        from its foot at (x, y). The mesh's run is its local Y, so it is placed with its foot at the pivot."""
+        """A real flight of stairs (SM_Stair_A: 3.6 m wide, 8.6 m run, 5.3 m rise above its base) scaled to `rise`,
+        climbing along `yaw` from its foot at (x, y). The run is the mesh's local Y and the mesh climbs toward
+        local STAIR_CLIMB*Y (measured in the showroom); the pivot sits at one side of the foot, so the stair is
+        placed by its bounding box, never by its pivot."""
         L, W, H = size(STAIR_A)
-        s = rise / H
+        s = rise / STAIR_RISE
         sw = (width / L) if width else max(0.6, s)
-        self.add(STAIR_A, *l2w(x, y, yaw, (W * s) / 2, 0), self.g(x, y), sw, s, s, yaw - math.pi / 2)
+        cx, cy = l2w(x, y, yaw, W * s / 2, 0)  # bbox centre is half a run up the slope from the foot
+        self.place(STAIR_A, cx, cy, self.g(x, y), sw, s, s, yaw - STAIR_CLIMB * math.pi / 2)
         self.st("stairs")
+
+    # ---- water features ---------------------------------------------------------------------------------------
+    def basin(self, cx, cy, radius, rim_h=0.75, rim_w=0.8, z_base=None, water_row="NewRow_183"):
+        """A round fountain basin: a solid masonry ring (concrete segments `rim_w` wide, `rim_h` tall) with water
+        tiles entirely inside it, 0.25 m below the rim. A thin brick wall reads as a rail from the air and 3 m
+        tiles poked through the ring (seen in the game), so the ring is thick and the tiles stop 1.6 m short."""
+        z0 = self.g(cx, cy) if z_base is None else z_base
+        n = max(12, int(2 * math.pi * radius / 2.5))
+        for q in range(n):
+            a = (q + 0.5) / n * 2 * math.pi
+            px, py = cx + radius * math.cos(a), cy + radius * math.sin(a)
+            self.box("concrete", px, py, z0, rim_h, 2 * math.pi * radius / n + 0.15, rim_w, a + math.pi / 2)
+        step = 2.0
+        k = int(radius // step) + 1
+        for j in range(-k, k + 1):
+            for i in range(-k, k + 1):
+                if math.hypot(i * step, j * step) < radius - rim_w / 2 - 1.45:
+                    self.add(water_row, cx + i * step, cy + j * step, z0 + rim_h - 0.25, step / 4, step / 4, 1.0)
+        self.st("basins")
 
     # ---- bridges and arches ----------------------------------------------------------------------------------
     def wooden_bridge(self, cx, cy, length, width, yaw, clear_h=3.2):
@@ -234,20 +287,23 @@ class MapKit:
             max(0.8, min(1.2, (clear_h + 0.5) / H)),
         )
         z0 = self.g(cx, cy)
-        self.add(DECK_ON_POSTS, cx, cy, z0 - 0.2, sx, sy, sz, yaw + math.pi / 2)
+        self.place(DECK_ON_POSTS, cx, cy, z0 - 0.2, sx, sy, sz, yaw + math.pi / 2)  # corner pivot: place by bbox
         top = z0 - 0.2 + H * sz
-        for sgn in (-1, 1):
-            foot = l2w(cx, cy, yaw, sgn * (length / 2 + 8.6 * top / 5.67 * 0.5), 0)
+        _, run, _ = size(STAIR_A)
+        for sgn in (-1, 1):  # a stair at each end, its top landing meeting the deck edge
+            foot = l2w(cx, cy, yaw, sgn * (length / 2 + run * (top - z0) / STAIR_RISE), 0)
             self.stairs(foot[0], foot[1], yaw + (math.pi if sgn > 0 else 0.0), top - z0, width)
         self.st("wooden_bridges")
 
-    def bridge(self, cx, cy, length, width, yaw, clear_h=3.2, deck="flagstone", stairs=None, name=""):
+    def bridge(self, cx, cy, length, width, yaw, clear_h=3.2, deck="flagstone", stairs=None, name="", span=None):
         """A stone footbridge you can fly under, from real pieces: brick piers at each end with a rectangular
         passage between them (the only arch mesh in the game is a futuristic one, so the opening is square),
         a concrete deck surfaced with `deck`, stone parapets, and at each end either a real flight of stairs
         (short footbridges, the default under 24 m) or a textured flagstone ramp between brick embankment walls.
         `length` runs along `yaw`; the passage runs across it. Heights in metres above the ground at the centre."""
         z0 = self.g(cx, cy)
+        if span is not None:  # over a road cut the deck spans just the cut, never the whole mapped approach
+            length = min(length, span)
         H = clear_h + 0.6  # deck top
         if stairs is None:
             stairs = length < 24
@@ -271,7 +327,7 @@ class MapKit:
             self._raised_parapet(edge, z0 + H)
         for sgn in (-1, 1):  # approaches
             if stairs:
-                foot = l2w(cx, cy, yaw, sgn * (length / 2 + 8.6 * H / 5.67), 0)
+                foot = l2w(cx, cy, yaw, sgn * (length / 2 + size(STAIR_A)[1] * H / STAIR_RISE), 0)
                 self.stairs(foot[0], foot[1], yaw + (math.pi if sgn > 0 else 0.0), H, width)
             else:
                 run = max(12.0, H * 4.0)
@@ -287,11 +343,12 @@ class MapKit:
     def _raised_parapet(self, pts, z):
         (x0, y0), (x1, y1) = pts
         L = math.hypot(x1 - x0, y1 - y0)
-        n = max(1, int(round(L / 3.76)))
+        pl = size(PARAPET)[0]  # 0.94 m sections at natural size: stretched 4x the railing dissolves into posts
+        n = max(1, int(round(L / pl)))
         yaw = math.atan2(y1 - y0, x1 - x0)
         for q in range(n):
             t = (q + 0.5) / n
-            self.add(PARAPET, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, z, L / (n * 0.94), 1.0, 1.0, yaw)
+            self.add(PARAPET, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, z, L / (n * pl), 1.0, 1.0, yaw)
 
     def _ramp(self, a, b, z0, z1, width, thick=0.4, material="flagstone"):
         """Pitched slab from a (height z0) to b (height z1): a textured ground plane tilted to the slope, over a grey
