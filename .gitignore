@@ -12,3 +12,5 @@ __pycache__/
 .DS_Store
 maps/*/preview.png
 maps/*/topdown.png
+# local agent config
+.claude/
