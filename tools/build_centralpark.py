@@ -639,7 +639,11 @@ for l in F['lines']:
 # ---- 3. the Mall, Bethesda Terrace and the Angel fountain ---------------------------------------------------
 _arc = next(l for l in F['lines'] if l['tags'].get('name') == 'Bethesda Arcade')
 _south = max(_arc['pts'][0], _arc['pts'][-1], key=lambda q: q[1])  # the Mall meets the arcade at its south mouth
-MALL_X, MALL_Y1, MALL_Y0 = _south[0], _south[1] + 9.0, _south[1] + 370.0  # the Mall runs from the Literary Walk (+Y) up to the Terrace
+MALL_X, MALL_Y1, MALL_Y0 = (
+    _south[0],
+    _south[1] + 9.0,
+    _south[1] + 370.0,
+)  # the Mall runs from the Literary Walk (+Y) up to the Terrace
 kit.ribbon([(MALL_X, MALL_Y0), (MALL_X, MALL_Y1)], 12.0, 'flagstone')
 mark_line([(MALL_X, MALL_Y0), (MALL_X, MALL_Y1)], 12, 1)
 for y in range(int(MALL_Y1), int(MALL_Y0), 12):
@@ -678,7 +682,9 @@ gA = ground(acx, acy)
 box('concrete', acx, acy, gA + 4.0, 0.6, 16, 70, ayaw)  # Terrace Drive deck: 16 m thick along the arcade, 70 m across
 kit.surface('asphalt', acx, acy, 12, 70, ayaw, z_base=gA + 4.6)
 for sgn in (-1, 1):
-    kit.wall([l2w(acx, acy, ayaw, -8, sgn * 7.5), l2w(acx, acy, ayaw, 8, sgn * 7.5)], 'retaining', 4.0)  # the arcade: a 15 m passage under the drive
+    kit.wall(
+        [l2w(acx, acy, ayaw, -8, sgn * 7.5), l2w(acx, acy, ayaw, 8, sgn * 7.5)], 'retaining', 4.0
+    )  # the arcade: a 15 m passage under the drive
     for side in (-1, 1):  # the embankment faces either side of the passage mouth
         kit.wall([l2w(acx, acy, ayaw, sgn * 8, side * 7.5), l2w(acx, acy, ayaw, sgn * 8, side * 35)], 'retaining', 4.0)
     kit._raised_parapet([l2w(acx, acy, ayaw, sgn * 7.0, -34), l2w(acx, acy, ayaw, sgn * 7.0, 34)], gA + 4.6)
@@ -1412,6 +1418,15 @@ dst = os.path.join(GAME_USER_MAPS, NAME)
 if os.path.isdir(dst):
     shutil.rmtree(dst)
 shutil.copytree(out, dst)
+import mapcheck
+
+_fl, _bu, _off = mapcheck.run(map_json, LAND, verbose=False)
+_sp = mapcheck.spawn_clear(map_json, LAND, clearance=1.0)
+print(
+    f'checks: {sum(map(len, _fl.values()))} floating, {sum(map(len, _bu.values()))} buried, {_off} off the landscape, spawn {"CLEAR" if not _sp else "BLOCKED"}'
+)
+if _sp:
+    raise SystemExit('SPAWN BLOCKED: the take-off point must have 1 m of open air in every direction (see above)')
 n = sum(len(v) for v in rows_all.values())
 print(f'{NAME}: {n} instances, {len(rows_all)} rows, north yaw {north_yaw:.1f} -> {dst}')
 print(stats)

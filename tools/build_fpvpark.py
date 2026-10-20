@@ -2376,6 +2376,7 @@ blocked = raceline.check(_data, clearance=1.5, land=LAND, verbose=True, obbs=_ob
 if blocked:
     raise SystemExit(f'RACE NOT FLYABLE: {blocked} blocked legs (see above)')
 print('race: all', len(gates) + 1, 'legs clear')
+mapcheck.spawn_clear(_data, LAND, clearance=1.0)
 _fl, _bu, _off = mapcheck.run(
     _data, LAND, struct_rows=CORE | {LED_V, SCAFFOLD_W, BALLOON, ARCH} | set(NEONS), verbose=True
 )

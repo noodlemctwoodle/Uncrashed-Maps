@@ -135,6 +135,35 @@ def run(data, land, struct_rows=(), verbose=True):
     return floaters, buried, off
 
 
+def spawn_clear(data, land, clearance=1.0, x=0.0, y=0.0, verbose=True):
+    """The drone needs open air to take off: nothing but the ground surface may lie within `clearance` metres of
+    the spawn capsule in any direction. The capsule is sampled from 0.2 m to 2.2 m above the ground at (x, y)
+    (freestyle maps spawn at the world origin; a race map's start comes from its StartTransform). Ground planes and
+    water are exempt (the drone sits on them). Returns the offending rows."""
+    sx, sy = x, y
+    if data.get('Race', {}).get('CheckPoints'):
+        st = data['Race']['StartTransform']['Translation']
+        sx, sy = st['X'] / 100, st['Y'] / 100
+    h = land.height_cm(sx * 100, sy * 100)
+    g = (h or 0) / 100
+    hits = {}
+    for o in raceline.load_obbs(data):
+        if math.hypot(o.cx - sx, o.cy - sy) > o.rad + clearance + 0.5:
+            continue
+        for k in range(11):
+            p = (sx, sy, g + 0.2 + 0.2 * k)
+            if o.hit(p, clearance):
+                hits.setdefault(o.row, []).append((round(o.cx - sx, 1), round(o.cy - sy, 1), round(o.T[2] - g, 1)))
+                break
+    if verbose:
+        for r, v in hits.items():
+            nm = (raceline.CAT[r]['mesh'] or raceline.CAT[r].get('blueprint') or '').split('/')[-1].split('.')[0]
+            print(f'SPAWN BLOCKED by {r} {nm}: {len(v)} within {clearance} m, e.g. {v[:3]} (dx, dy, dz from the spawn)')
+        if not hits:
+            print(f'spawn clear: nothing within {clearance} m of the take-off point ({sx:.1f}, {sy:.1f})')
+    return hits
+
+
 if __name__ == '__main__':
     if '--flat' in sys.argv:  # the Empty board: flat landscape at the given height (cm)
 
@@ -155,4 +184,6 @@ if __name__ == '__main__':
 
         base = sys.argv[sys.argv.index('--base') + 1] if '--base' in sys.argv else 'L_BaseLandscape04'
         land = Landscape(os.path.join(ROOT, 'data/extracted/Uncrashed/Content/MapEditor/BaseLevel', base))
-    run(json.load(open(sys.argv[1], encoding='utf-8-sig')), land)
+    _d = json.load(open(sys.argv[1], encoding='utf-8-sig'))
+    run(_d, land)
+    spawn_clear(_d, land)

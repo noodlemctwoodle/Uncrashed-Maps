@@ -1,0 +1,8 @@
+{
+  "title": "New York City - Central Park",
+  "description": "Central Park built from OpenStreetMap on the grassy landscape: the Lake with Bow Bridge and the Ramble, Bethesda Terrace and the Angel fountain, the Mall's elm walk, Sheep Meadow, Belvedere Castle on Vista Rock, the Obelisk, the Carousel, Delacorte, Wollman Rink, the Pond, 43 arches and bridges to fly under, the sunken transverse roads, streams, ballfields, tennis courts, 10,000 trees and the Midtown skyline along Central Park South. Spawn is on the lower terrace at Bethesda looking over the Lake. Generated with the open-source tools at github.com/noodlemctwoodle/Uncrashed-Maps. Map data (c) OpenStreetMap contributors.",
+  "tags": ["Freestyle"],
+  "changenote": "Rebuilt on the grassy landscape with real arches, stairs, fences and textured buildings.",
+  "visibility": 0,
+  "publishedfileid": 0
+}
