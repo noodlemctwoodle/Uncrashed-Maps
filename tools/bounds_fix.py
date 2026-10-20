@@ -1,6 +1,39 @@
 #!/usr/bin/env python3
 """Complete data/catalog.json bounds for every row: basic shapes whose ExtendedBounds omit Origin, and blueprint rows
-(union of their StaticMeshComponent meshes' bounds, offset by RelativeLocation and scaled by RelativeScale3D)."""
+(union of their StaticMeshComponent meshes' bounds, offset by RelativeLocation and scaled by RelativeScale3D).
+
+Purpose
+    tools/build_catalog.py only records bounds for mesh rows whose ``ExtendedBounds`` has both Origin and BoxExtent.
+    This pass fills the rest: basic shapes (SM_Cube, SM_Cylinder, SM_CubeHole, SM_Pente: 1 m, centre pivot) whose
+    cooked bounds leave ``Origin`` out because it is zero, and blueprint rows (BP_meWater, Bp_Grass, lamps, gates
+    ...) whose size is the union of the StaticMeshComponents in the Blueprint's generated class.
+
+Usage
+    python3 tools/bounds_fix.py      (rewrites data/catalog.json in place; prints the fixed count and what is still
+                                      missing with the reason)
+
+Inputs
+    The game's paks (``PAKS``), ``data/catalog.json`` (rows lacking ``bounds``); assets are extracted on demand
+    into ``data/extracted/`` (cached).
+Outputs
+    Each repaired row gets ``bounds = {origin: [x, y, z], extent: [hx, hy, hz]}`` in cm (centre and half-sizes in the
+    row's own frame, i.e. relative to the pivot the game places). Blueprint rows also get ``bounds_from =
+    'blueprint components'`` and ``bounds_note`` (component count, unreadable parts). Rows that still fail keep or
+    gain ``err``/``bounds_note``. Four rows (electric poles, Megascans pipe, Maple08) were later estimated by hand
+    and carry ``bounds_est``; this script does not set that flag.
+
+Format facts
+    A Blueprint asset's exports include one object per component of its SimpleConstructionScript; the ones whose
+    class ends in ``StaticMeshComponent`` have ``StaticMesh`` (a ``/Game/...`` object path), ``RelativeLocation``
+    (cm), ``RelativeRotation`` (degrees, Pitch/Yaw/Roll) and ``RelativeScale3D``; absent properties mean the UE
+    defaults (0 / 1). Component bounds are composed as ``centre = RelativeLocation + Origin * scale`` and
+    ``half = BoxExtent * |scale|``.
+
+Gotchas
+    Rotation is not applied exactly: a part rotated by more than 1 degree on any axis has its horizontal extents
+    inflated to the larger of the two (a square footprint that always contains the rotated box); vertical extent is
+    kept as is. Child components are treated as if attached to the root (no parent transform chaining).
+"""
 
 import sys, os, json, glob
 
@@ -12,6 +45,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAKS = os.path.expanduser(
     "~/Library/Application Support/Steam/steamapps/common/Uncrashed FPV Drone Sim/Uncrashed-Mac-Shipping.app/Contents/UE4/Uncrashed/Content/Paks"
 )
+# One {in-pak path: Pak} index over every pak so extract() can find any asset (later paks override earlier ones).
 index = {}
 for p in sorted(glob.glob(os.path.join(PAKS, '*.pak'))):
     pk = Pak(p)
@@ -20,6 +54,10 @@ for p in sorted(glob.glob(os.path.join(PAKS, '*.pak'))):
 
 
 def extract(game_path):
+    """Extract the ``.uasset`` and ``.uexp`` of a ``/Game/Dir/Name.Name`` object path into data/extracted (cached).
+
+    Returns the local ``.uasset`` path, or None when either file is missing from the paks.
+    """
     rel = game_path.split('.')[0].replace('/Game/', '../../../Uncrashed/Content/')
     outs = []
     for ext in ('.uasset', '.uexp'):
@@ -35,7 +73,11 @@ def extract(game_path):
 
 
 def mesh_bounds(game_path):
-    """(origin, extent) in cm for a StaticMesh asset, or None."""
+    """(origin, extent) in cm for a StaticMesh asset, or None.
+
+    Reads ``ExtendedBounds`` of the first export whose class ends in ``StaticMesh``; a missing ``Origin`` (basic
+    shapes) is taken as zero, a missing ``BoxExtent`` returns None. Both values are ``[x, y, z]`` lists.
+    """
     ua = extract(game_path)
     if not ua:
         return None
@@ -55,6 +97,13 @@ def mesh_bounds(game_path):
 
 
 def bp_bounds(game_path):
+    """Union of the StaticMeshComponent bounds of a Blueprint asset.
+
+    ``game_path`` is the ``/Game/...`` path of the Blueprint (``_C`` class suffix or not; only the package matters).
+    Returns ``((centre, half_extents), note)`` in cm, or ``(None, reason)`` when the asset is not in the paks or has
+    no readable mesh component. ``note`` lists the component count and up to two problems (unreadable component,
+    mesh whose bounds failed). Rotated parts are inflated as described in the module docstring.
+    """
     ua = extract(game_path)
     if not ua:
         return None, 'bp not in pak'
@@ -83,6 +132,7 @@ def bp_bounds(game_path):
         if not mb:
             continue
         o, ex_ = mb
+        # Component transform; UE defaults apply when a property is absent (location 0, scale 1, no rotation).
         loc = props.get('RelativeLocation') or {}
         sc = props.get('RelativeScale3D') or {}
         rot = props.get('RelativeRotation')
@@ -93,6 +143,7 @@ def bp_bounds(game_path):
         ):  # rotated part: inflate to its largest horizontal extent
             r = max(ex_[0] * abs(s[0]), ex_[1] * abs(s[1]))
             ex_ = [r / abs(s[0] or 1), r / abs(s[1] or 1), ex_[2]]
+        # Axis-aligned union in the blueprint's frame: centre = location + origin * scale, half = extent * |scale|.
         for k in range(3):
             c = l[k] + o[k] * s[k]
             h = ex_[k] * abs(s[k])
@@ -107,6 +158,7 @@ def bp_bounds(game_path):
 
 
 if __name__ == '__main__':
+    # Repair pass: mesh rows first (basic shapes), then blueprint rows; rows with bounds already are untouched.
     cat = json.load(open(os.path.join(ROOT, 'data/catalog.json')))
     fixed = 0
     still = []

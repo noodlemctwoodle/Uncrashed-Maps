@@ -1,10 +1,55 @@
 #!/usr/bin/env python3
-"""Build a Midtown Manhattan map for Uncrashed from NYC Open Data footprints + street centrelines.
+"""Build and install the NYC map (Midtown Manhattan) for Uncrashed from NYC Open Data.
 
-Coordinate frame (Unreal, cm): X ~ north, Y ~ east, Z = up (frame rotated so the spawn faces the Empire State
-Building). Yaw = compass bearing in that frame. Asset rows are rows of DT_MapEditorAssets; see README.
+Purpose
+    Turns public GIS data into one Uncrashed map, "New York City - Midtown Manhattan": every building footprint
+    becomes box or textured-mesh massing at its real roof height, every street centreline becomes asphalt with
+    sidewalks, markings, trees, lamps, traffic and pedestrians, parks and leftover lots are dressed, and FPV
+    features (construction skeletons, open parking decks, skybridges, the Park Avenue viaduct) are added. The
+    whole 6 km board is used: full detail in the central 2 km square, boxes, roads and parks in the rings beyond
+    it, and water tiles wherever the shoreline-clipped tracts show no land. The script runs top to bottom as one
+    pipeline (module-level code); the sections are marked with `# ---- ... ----` headers.
 
-Outputs one map, NYC, including window-grid and billboard decals (pass --no-windows to leave them out).
+Inputs (NYC Open Data Socrata datasets, already saved in data/; see README "Regenerating")
+    data/midtown_buildings.json   footprints 5zhs-2jue: the_geom, height_roof (feet), construction_year, bin, name
+    data/midtown_streets.json     centrelines inkn-q76z: the_geom, streetwidth (feet), stname_label, trafdir,
+                                  rw_type, from/to_level_code
+    data/midtown_parks.json       Parks Properties enfh-gkve: multipolygon, signname, typecategory, acres
+    data/ring_*.json              the same three datasets for the whole 6 km board (mid and outer rings)
+    data/land_tracts.json         shoreline-clipped 2020 census tracts 63ge-mke6 (land mask for the rivers)
+    data/catalog.json             DT_MapEditorAssets rows with mesh bounds in cm (metres = values / 100)
+
+Outputs
+    maps/NYC/NYC.json, NYC.info, Thumbnail.jpg and Decals/*.png, plus an installed copy under
+    ~/Library/Application Support/Uncrashed/<STEAM_ID>/MapEditor/User/NYC/. Decal PNGs are also copied into the
+    editor's MapEditor/UserDecals/ and MapEditor/MapDecals/ libraries, which is where it loads user PNGs from
+    (they render blank otherwise).
+
+Usage
+    python3 tools/build_nyc.py [--no-windows]
+    --no-windows leaves the window-grid and billboard decals out. UNCRASHED_STEAM_ID overrides the Steam ID64.
+    Takes minutes, needs only the system Python (Pillow for the thumbnail and decal PNGs), and overwrites both
+    maps/NYC and the installed map.
+
+Coordinate frame and units
+    All placement maths is in METRES with +Z up; add() converts to Unreal CENTIMETRES for the JSON. The origin is
+    the 5th Avenue / 38th Street centreline node: a Track:false map spawns at the Empty board's PlayerStart,
+    which is the world origin facing yaw -90 deg (-Y). The frame is rotated by FRAME_ROT so that -Y points at
+    the Empire State Building; true north then lies at yaw FRAME_ROT (equivalent to 44 deg, stored in
+    CustomWeather.northyaw), so +X is roughly north and +Y roughly east. Yaw is math.atan2(y, x): it increases
+    from +X towards +Y like a compass bearing, and is in radians everywhere except the two functions that say
+    "_deg". Quaternions are UE (X, Y, Z, W); a pure yaw is (0, 0, sin(yaw/2), cos(yaw/2)).
+
+Measured conventions relied on (see .claude/skills/uncrashed-maps/SKILL.md and README)
+    - Translation is the actor pivot. SM_Cube and SM_Cylinder are 1 m with a centre pivot; SM_ConcreteFloor01
+      (NewRow_303) is 4 x 4 x 0.30 m with the pivot at the TOP (mesh z -0.29..+0.01); SM_ConcreteWall01
+      (NewRow_318) is 0.3 x 4 x 4 m with a bottom-centre pivot; the SM_BaseGround_0-1 ground planes are
+      4 x 4 x 0.1 m centre pivot; BP_meWater is a 4 m tile 2.1 m deep with the pivot AT THE SURFACE.
+    - The editor's PivotPointOffset column is not applied by the game to stored transforms: trust mesh bounds.
+    - Wall decals (BP_ME_Decals rows): basis X into the surface, Y world-down, Z = X x Y along the wall;
+      Scale3D = (depth, height / 4, width / 4); the row name is the PNG filename.
+    - Bp_Grass renders untextured grey on macOS (no Mac material override), so lawns are thin green cubes.
+    - The build is deterministic: one seeded random.Random(34) plus md5 hashes of building ids.
 """
 
 import json, math, os, sys, time, hashlib, shutil, random
@@ -17,9 +62,11 @@ STEAM_ID = os.environ.get(
     'UNCRASHED_STEAM_ID', '76561197969360950'
 )  # your Steam ID64: the game loads maps from MapEditor/User under it
 GAME_USER_MAPS = os.path.expanduser(f'~/Library/Application Support/Uncrashed/{STEAM_ID}/MapEditor/User')
-rng = random.Random(34)
+rng = random.Random(34)  # fixed seed: the same data always produces the same map
 
 # ---- asset rows -------------------------------------------------------------
+# Row names of DT_MapEditorAssets (see data/catalog.json / docs/ASSETS.md). Sizes quoted are the unscaled mesh
+# bounds in metres; Scale3D multiplies them.
 CUBE = dict(
     default='NewRow_13',
     yellow='NewRow_46',
@@ -33,9 +80,9 @@ CUBE = dict(
 CYL = dict(default='NewRow_14', grey='NewRow_261', black='NewRow_113', yellow='NewRow_64')  # SM_Cylinder, centre pivot
 CONCRETE = 'NewRow_303'  # SM_ConcreteFloor01 4x4x0.30 m, triplanar concrete, pivot at top (z -0.29..+0.01)
 BRICK = 'NewRow_318'  # SM_ConcreteWall01 0.3x4x4 m, triplanar brick, pivot at bottom centre
-WATER_TOWER = 'NewRow_251'
+WATER_TOWER = 'NewRow_251'  # SM_GrainSilo_3 (farm silo, 3.2 m dia x 8.7 m); scaled down it reads as a water tower
 ELM, MAPLE, SMALL_TREE, BUSH, BUSH2 = 'NewRow_168', 'NewRow_269', 'NewRow_166', 'NewRow_164', 'NewRow_226'
-LAMP_TALL, LAMP_SHORT = 'NewRow_3', 'NewRow_20'
+LAMP_TALL, LAMP_SHORT = 'NewRow_3', 'NewRow_20'  # BP_LightsNightME (9.9 m floodlight) / BP_LightsNightME3 (5.4 m lamp)
 TRASH_CAN, FOOD_CART, FOOD_STALL, DUMPSTER, CONE, BARRIER = (
     'NewRow_323',
     'NewRow_246',
@@ -58,8 +105,11 @@ PALLET, CRATE, BARREL, FUSEBOX, PLANTER, BENCH, CAFE_TABLE, CHAIR, STATUE = (
 SCAFFOLD = 'NewRow_198'  # SM_Scaffolding24 1.6 x 2.4 x 2.0, pivot at one end, z -0.57..1.41
 LED_V = 'NewRow_217'  # LED_SCREEN_VERTICAL 3 x 0.7 x 8 m, pivot bottom centre, screen faces +Y
 NEONS = ['NewRow_4', 'NewRow_148', 'NewRow_343']  # pink / orange / blue neon tubes (with light)
+# the editor's drone-pilot figures double as pedestrians
 PEOPLE_STAND = ['NewRow_252', 'NewRow_255', 'NewRow_801', 'NewRow_802']
 PEOPLE_SIT = ['NewRow_254', 'NewRow_800']
+# (row, length m, yaw fix deg, weight): Camaro (yellow, the taxi), GT86, old van (mesh is long along Y, hence
+# the 90 deg fix), Kangoo. Weights are the relative frequency in traffic and car parks.
 CARS = [
     ('NewRow_103', 4.8, 0, 45),
     ('NewRow_257', 4.3, 0, 30),
@@ -70,6 +120,10 @@ cat = json.load(open(os.path.join(DATA, 'catalog.json')))
 
 
 def mesh_info(row, max_stack, flat_roof):
+    """Describe a textured building mesh for try_mesh(): (length X m, length Y m, height above the pivot m,
+    max_stack, flat_roof). Bounds come from the catalog (cm, origin + extent); the height is origin.z + extent.z
+    because these meshes are ground-pivoted. `max_stack` = how many may be stacked vertically; `flat_roof` =
+    whether roof clutter may go on top."""
     b = cat[row]['bounds']
     ox, oy, oz = b['origin']
     ex, ey, ez = b['extent']
@@ -82,28 +136,35 @@ MESHES = {
 MESHES['NewRow_9'] = mesh_info('NewRow_9', 1, False)  # SM_building_01 brick low-rise (pitched roof details)
 MESHES['NewRow_95'] = mesh_info('NewRow_95', 1, False)  # sm_OldWorkshop_01_02
 
-FT = 0.3048
-Z_GROUND = 0.06
-Z_WALK = Z_GROUND + 0.15
-MAX_RANGE = 1000.0
+FT = 0.3048  # NYC Open Data heights and street widths are in feet
+Z_GROUND = 0.06  # top of the core ground slab (m); everything "on the ground" sits here, 6 cm above the board
+Z_WALK = Z_GROUND + 0.15  # top of the sidewalk kerb slabs (m): a 15 cm kerb
+MAX_RANGE = 1000.0  # half-size (m) of the board's MapSettings flyable range box; full detail inside it
 
-instances = {}
-facades = []  # (cx, cy, z0, h, lx, ly, yaw, style, bin)
-stats = defaultdict(int)
+instances = {}  # row name -> list of Transform dicts (the S_AssetsTransform payload); filled by add()
+facades = []  # (cx, cy, z0, h, lx, ly, yaw, style, bin) of plain box tiers that may get window decals
+stats = defaultdict(int)  # build counters printed at the end
 
 
 def quat_yaw(yaw_rad):
+    """UE quaternion (X, Y, Z, W) for a pure yaw of `yaw_rad` radians about +Z (Z = sin(yaw/2), W = cos(yaw/2),
+    the convention measured on Workshop maps)."""
     return dict(X=0.0, Y=0.0, Z=math.sin(yaw_rad / 2), W=math.cos(yaw_rad / 2))
 
 
 def quat_pitch_yaw(pitch_deg, yaw_deg):
+    """Quaternion for a rotator with the given pitch and yaw in DEGREES and zero roll (Unreal's rotator to
+    quaternion formula). Positive pitch tilts the local +X axis upwards; used for ramps and the menu camera."""
     P, Y = math.radians(pitch_deg) / 2, math.radians(yaw_deg) / 2
     SP, CP, SY, CY = math.sin(P), math.cos(P), math.sin(Y), math.cos(Y)
     return dict(X=SP * SY, Y=-SP * CY, Z=CP * SY, W=CP * CY)
 
 
 def quat_from_axes(X, Y, Z):
-    """Quaternion (X,Y,Z,W) whose rotation maps local axes onto the given orthonormal world vectors."""
+    """Quaternion (X,Y,Z,W) whose rotation maps local axes onto the given orthonormal world vectors.
+
+    X, Y, Z are unit 3-vectors (the columns of the rotation matrix). The four branches are the usual
+    matrix-to-quaternion conversion, picking the largest diagonal term to avoid dividing by a small number."""
     m = [[X[0], Y[0], Z[0]], [X[1], Y[1], Z[1]], [X[2], Y[2], Z[2]]]
     t = m[0][0] + m[1][1] + m[2][2]
     if t > 0:
@@ -134,8 +195,12 @@ def quat_from_axes(X, Y, Z):
 
 
 def decal_rot(normal_yaw):
-    """Wall decal basis as the editor places them and as UE's decal shader expects: X into the surface (projection
-    direction), Y straight down (texture V), Z = X x Y along the wall (texture U). Scale: X depth, Y height/4, Z width/4."""
+    """Rotation for a wall decal on a facade whose OUTWARD normal has yaw `normal_yaw` (radians).
+
+    Basis as the editor places wall decals (matches Workshop maps and UE's deferred-decal shader, user-confirmed):
+    X into the surface (projection direction), Y straight down (texture V), Z = X x Y along the wall (texture U).
+    The caller passes Scale3D = (depth, height / 4, width / 4) because the editor's decal size is 4 m. The PNG is
+    drawn upright."""
     c, s = math.cos(normal_yaw), math.sin(normal_yaw)
     X = (-c, -s, 0.0)
     Y = (0.0, 0.0, -1.0)
@@ -144,6 +209,11 @@ def decal_rot(normal_yaw):
 
 
 def add(row, x, y, z, sx=1.0, sy=1.0, sz=1.0, yaw=0.0, store=None, rot=None):
+    """Append one instance of asset `row` to the map.
+
+    x, y, z: the actor PIVOT in metres (converted to cm, rounded to 0.01 cm). sx, sy, sz: Scale3D multipliers of
+    the mesh's native size. yaw: radians about +Z; `rot` (a quaternion dict) overrides it. `store` lets the
+    decal pass collect into its own dict instead of `instances`."""
     (store if store is not None else instances).setdefault(row, []).append(
         {
             'Rotation': rot if rot else quat_yaw(yaw),
@@ -154,6 +224,13 @@ def add(row, x, y, z, sx=1.0, sy=1.0, sz=1.0, yaw=0.0, store=None, rot=None):
 
 
 def box(kind, cx, cy, z0, h, lx, ly, yaw=0.0):
+    """Place a solid box with its BOTTOM at z0 (m): centre (cx, cy), height h, size lx along local X and ly
+    along local Y, yaw in radians. `kind` is 'concrete' (textured floor), 'brick' (textured wall) or a CUBE colour.
+
+    Each row has a different pivot, so the translation differs: SM_ConcreteFloor01 is 0.30 m thick with the
+    pivot at the TOP (z -0.29..+0.01), so it is scaled to h / 0.30 and the pivot lifted by 0.29 * scale to put the
+    bottom at z0; SM_ConcreteWall01 is base-pivoted, so z0 is used as is (scale = size / native 0.3 x 4 x 4 m);
+    cubes are centre-pivoted, so the pivot goes to z0 + h / 2. Sizes are clamped to >= 0.1 m (h >= 1 cm)."""
     lx, ly, h = max(lx, 0.1), max(ly, 0.1), max(h, 0.01)
     if kind == 'concrete':
         sz = h / 0.30
@@ -165,7 +242,10 @@ def box(kind, cx, cy, z0, h, lx, ly, yaw=0.0):
 
 
 def pitched_slab(kind, x0, y0, z0, x1, y1, z1, width, thick=0.5):
-    """Centre-pivot slab (cube rows only) from (x0,y0,z0) to (x1,y1,z1): a ramp."""
+    """Centre-pivot slab (cube rows only) from (x0,y0,z0) to (x1,y1,z1): a ramp.
+
+    The slab's TOP surface runs between the two points (the centre pivot is dropped by thick / 2); `width` is
+    across the ramp, `thick` vertical, all in metres. Yaw follows the plan direction and pitch the rise."""
     L = math.hypot(x1 - x0, y1 - y0)
     yaw = math.degrees(math.atan2(y1 - y0, x1 - x0))
     pitch = math.degrees(math.atan2(z1 - z0, L))
@@ -182,6 +262,7 @@ def pitched_slab(kind, x0, y0, z0, x1, y1, z1, width, thick=0.5):
 
 
 def cylinder(kind, cx, cy, z0, h, d):
+    """Vertical cylinder (CYL colour `kind`) with its bottom at z0, height h and diameter d (m); centre pivot."""
     add(CYL[kind], cx, cy, z0 + h / 2, d, d, h)
 
 
@@ -193,29 +274,38 @@ ASPHALT, PAVE, PAVE2, DIRT, GRAVEL = 'NewRow_182', 'NewRow_185', 'NewRow_197', '
 
 
 def plane(row, x, y, z_top, lx, ly, yaw=0.0):
+    """Textured ground plane (ASPHALT, PAVE, ...) of lx x ly m with its TOP at z_top. The 4 x 4 x 0.1 m plane is
+    centre-pivoted, hence the -0.05, and scaled by size / 4 (minimum 0.5 m)."""
     add(row, x, y, z_top - 0.05, max(lx, 0.5) / 4, max(ly, 0.5) / 4, 1.0, yaw)
     stats['planes'] += 1
 
 
 def lawn(x, y, z_top, lx, ly, yaw=0.0):
-    # Bp_Grass renders without its texture on macOS (wind grass material, no Mac override), so lawns are a plain green surface
+    """Lawn of lx x ly m with its top at z_top: a 5 cm green cube. Bp_Grass renders without its texture on macOS
+    (wind grass material, no Mac override), so lawns are a plain green surface instead."""
     box('green', x, y, z_top - 0.05, 0.05, lx, ly, yaw)
     stats['lawn'] += 1
 
 
 def l2w(cx, cy, yaw, u, v):
+    """Local to world: point (u, v) in a frame centred at (cx, cy) and rotated by `yaw` (u along the yaw
+    direction, v at yaw + 90 deg) -> world (x, y). Used for every "offset along a rectangle / segment"."""
     c, s = math.cos(yaw), math.sin(yaw)
     return cx + u * c - v * s, cy + u * s + v * c
 
 
 # ---- geometry ---------------------------------------------------------------
+# Pure 2-D helpers on lists of (x, y) metres. Rectangles are (cx, cy, lx, ly, th): centre, side lengths and the
+# yaw (radians) of the lx side.
 def poly_area(pts):
+    """Area of a simple polygon (shoelace formula), m^2."""
     return 0.5 * abs(
         sum(pts[i][0] * pts[(i + 1) % len(pts)][1] - pts[(i + 1) % len(pts)][0] * pts[i][1] for i in range(len(pts)))
     )
 
 
 def centroid(pts):
+    """Area-weighted centroid of a polygon; falls back to the vertex mean for degenerate (zero-area) rings."""
     a = cx = cy = 0
     for i in range(len(pts)):
         x0, y0 = pts[i]
@@ -230,11 +320,13 @@ def centroid(pts):
 
 
 def convex_hull(pts):
+    """Convex hull (Andrew's monotone chain), counter-clockwise, collinear points dropped."""
     pts = sorted(set(pts))
     if len(pts) <= 2:
         return pts
 
     def cross(o, a, b):
+        """2-D cross product of oa x ob: > 0 for a left turn."""
         return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
 
     lo = []
@@ -251,6 +343,8 @@ def convex_hull(pts):
 
 
 def min_rect(pts):
+    """Minimum-area enclosing rectangle -> (cx, cy, lx, ly, th). Rotating calipers: the optimum has a side
+    collinear with a hull edge, so every hull edge direction is tried."""
     hull = convex_hull(pts)
     best = None
     for i in range(len(hull)):
@@ -268,6 +362,7 @@ def min_rect(pts):
 
 
 def point_in_poly(x, y, pts):
+    """Even-odd ray-casting point-in-polygon test."""
     inside = False
     n = len(pts)
     for i in range(n):
@@ -279,6 +374,8 @@ def point_in_poly(x, y, pts):
 
 
 def largest_rect(grid):
+    """Largest all-True axis-aligned rectangle in a boolean grid (rows x cols) -> (row0, col0, height, width),
+    or None if the grid is all False. Classic histogram-stack algorithm, O(rows * cols)."""
     R, C = len(grid), len(grid[0])
     hist = [0] * C
     best = (0, None)
@@ -299,10 +396,11 @@ def largest_rect(grid):
     return best[1]
 
 
-GRID_SNAP = None  # set once the street grid orientation is known
+GRID_SNAP = None  # yaw of the Manhattan avenue grid (radians); set once the street graph has been read
 
 
 def aligned_rect(pts, th):
+    """Bounding rectangle of pts in the frame rotated by `th` -> (cx, cy, lx, ly, th)."""
     c, s = math.cos(th), math.sin(th)
     us = [p[0] * c + p[1] * s for p in pts]
     vs = [-p[0] * s + p[1] * c for p in pts]
@@ -311,6 +409,8 @@ def aligned_rect(pts, th):
 
 
 def best_rect(pts):
+    """Footprint rectangle: the grid-aligned box when it is within 18 % of the minimum-area one (so near-square
+    footprints do not come out at odd angles), otherwise the minimum-area rectangle."""
     r = min_rect(pts)
     if GRID_SNAP is None:
         return r
@@ -319,6 +419,12 @@ def best_rect(pts):
 
 
 def decompose(pts, max_rects=12):
+    """Split a building footprint into up to `max_rects` rectangles (cx, cy, lx, ly, th).
+
+    One rectangle when it covers >= 74 % of the polygon (or the footprint is under 7 m wide). Otherwise the
+    polygon is rasterised in the rectangle's frame (cell = 2 m, or coarser so there are at most ~40 cells along
+    the long side) and greedily covered with the largest free rectangle until 97 % of the cells are covered;
+    rectangles under 2 cells are ignored. This keeps L- and U-shaped buildings."""
     area = poly_area(pts)
     cx, cy, lx, ly, th = best_rect(pts)
     if lx * ly <= 0 or area / (lx * ly) >= 0.74 or min(lx, ly) < 7:
@@ -350,9 +456,11 @@ def decompose(pts, max_rects=12):
 
 
 def clip_to_square(pts, half):
-    """Sutherland-Hodgman clip of a polygon to the axis-aligned square [-half, half]^2."""
+    """Sutherland-Hodgman clip of a polygon to the axis-aligned square [-half, half]^2. Returns [] when fewer
+    than three vertices survive (used for park polygons that cross the board edge, e.g. Central Park)."""
 
     def clip(poly, inside, intersect):
+        """Clip `poly` against one half-plane given by an `inside` test and an edge `intersect` function."""
         out = []
         for i in range(len(poly)):
             cur, prev = poly[i], poly[i - 1]
@@ -365,6 +473,7 @@ def clip_to_square(pts, half):
         return out
 
     def ix(p, q, axis, val):
+        """Point where segment p-q crosses the line `axis` = val."""
         t = (val - p[axis]) / (q[axis] - p[axis])
         return (p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1]))
 
@@ -377,7 +486,10 @@ def clip_to_square(pts, half):
 
 
 def rect_faces(cx, cy, lx, ly, th):
-    """4 facades: (fx, fy, length, normal_yaw, u_edge, v_edge, nu, nv)."""
+    """4 facades: (fx, fy, length, normal_yaw, u_edge, v_edge, nu, nv).
+
+    (fx, fy) is the face midpoint, `length` its width, `normal_yaw` the yaw (radians) of its OUTWARD normal,
+    (u_edge, v_edge) the midpoint in the rectangle's local frame and (nu, nv) the outward normal there."""
     out = []
     for u, v, L, nu, nv in (
         (0, ly / 2, lx, 0, 1),
@@ -391,21 +503,26 @@ def rect_faces(cx, cy, lx, ly, th):
 
 
 # ---- data & frame -----------------------------------------------------------
+# Socrata GeoJSON: coordinates are [lon, lat]. The three landmark BINs (NYC Building Identification Numbers)
+# get hand-tuned massing instead of the generic rules.
 buildings = json.load(open(os.path.join(DATA, 'midtown_buildings.json')))
 streets = json.load(open(os.path.join(DATA, 'midtown_streets.json')))
 ESB_BIN, CHRYSLER_BIN, ONE_VANDERBILT_BIN = '1015862', '1036156', '1090825'
 
 
 def rings(b):
+    """Outer rings (lists of [lon, lat]) of a building's the_geom, Polygon or MultiPolygon; holes are ignored."""
     g = b['the_geom']
     polys = g['coordinates'] if g['type'] == 'MultiPolygon' else [g['coordinates']]
     return [p[0] for p in polys]
 
 
+# Frame: origin at the 5 Ave / 38 St centreline node, rotated so the Empire State Building (vertex mean of its
+# footprint) lies exactly on -Y, the direction the drone faces at spawn.
 esb = next(b for b in buildings if b['bin'] == ESB_BIN)
 esb_lon = sum(c[0] for c in rings(esb)[0]) / len(rings(esb)[0])
 esb_lat = sum(c[1] for c in rings(esb)[0]) / len(rings(esb)[0])
-NODES_LL = {}
+NODES_LL = {}  # (lon, lat) rounded to 1e-6 -> set of street names meeting at that centreline end node
 for s_ in streets:
     n = s_.get('stname_label', '')
     for line in s_['the_geom']['coordinates']:
@@ -414,25 +531,34 @@ for s_ in streets:
 
 
 def node_of(a, b):
+    """(lon, lat) of the first centreline node where street `a` meets a street whose label ends with `b`
+    (e.g. node_of('5 AVE', '38 ST')). Raises StopIteration if there is none."""
     return next(k for k, v in NODES_LL.items() if a in v and any(x.endswith(b) for x in v))
 
 
 lon0, lat0 = node_of('5 AVE', '38 ST')  # spawn: 5th Avenue & 38th Street
+# equirectangular projection: metres per degree of latitude / longitude at the origin (good enough over 3 km)
 KLAT = 111320.0
 KLON = 111320.0 * math.cos(math.radians(lat0))
+# atan2(east, north) is the compass bearing of the ESB from the spawn; rotating by -90 deg minus that bearing
+# puts the ESB at yaw -90 deg, i.e. on -Y. True north ends up at yaw FRAME_ROT.
 FRAME_ROT = math.radians(-90) - math.atan2((esb_lon - lon0) * KLON, (esb_lat - lat0) * KLAT)
 
 
 def proj(lon, lat):
+    """Project (lon, lat) to map metres (x, y): local north/east offsets from the origin rotated by FRAME_ROT."""
     n, e = (lat - lat0) * KLAT, (lon - lon0) * KLON
     c, s_ = math.cos(FRAME_ROT), math.sin(FRAME_ROT)
     return (n * c - e * s_, n * s_ + e * c)
 
 
 def in_range(x, y, margin=0.0):
+    """True inside the central 2 km square shrunk by `margin` m (a negative margin enlarges it)."""
     return abs(x) <= MAX_RANGE - margin and abs(y) <= MAX_RANGE - margin
 
 
+# landmark positions used later: Herald Square, the Times Square bowtie nodes (Broadway 42nd..47th), Duffy
+# Square (47th) and the latitudes bounding the two Broadway pedestrian plazas
 esb_x, esb_y = proj(esb_lon, esb_lat)
 herald = proj(*node_of('BROADWAY', '34 ST'))
 ts_nodes = [proj(*node_of('BROADWAY', f'{n} ST')) for n in (42, 43, 44, 45, 46, 47)]
@@ -443,6 +569,7 @@ lat_33, lat_35 = node_of('BROADWAY', '33 ST')[1], node_of('BROADWAY', '35 ST')[1
 
 
 def dist_to_polyline(px, py, pts):
+    """Distance from (px, py) to a polyline and the nearest point on it -> (d, (qx, qy))."""
     best = 1e9
     bp = None
     for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
@@ -456,9 +583,14 @@ def dist_to_polyline(px, py, pts):
 
 
 # ---- streets graph ----------------------------------------------------------
-segments = []
-node_w = {}
-node_deg = defaultdict(int)
+# Every at-grade centreline becomes straight segments between consecutive vertices. Kept: level codes 13 (at
+# grade; elevated codes are handled in the viaduct section) and rw_type 1 / 9 / missing (other roadway types
+# are dropped). Width is `streetwidth` feet -> m, default 32 ft, clamped 6..26 m. node_w / node_deg record the
+# widest street and the number of line ends at each node for intersection trimming later. `plaza` marks the
+# Broadway blocks that are pedestrian plazas (42nd-47th: Times Square, 33rd-35th: Herald Square).
+segments = []  # dicts: p0, p1 (m), w, name, ave, plaza, trafdir, L, yaw, k0, k1 (node keys), first, last
+node_w = {}  # node key -> widest street meeting there (m)
+node_deg = defaultdict(int)  # node key -> number of centreline ends meeting there
 for s in streets:
     if s.get('from_level_code') not in (None, '13') or s.get('to_level_code') not in (None, '13'):
         continue
@@ -503,21 +635,25 @@ for s in streets:
 
 
 def seg_mid(sg):
+    """Midpoint (m) of a segment."""
     return ((sg['p0'][0] + sg['p1'][0]) / 2, (sg['p0'][1] + sg['p1'][1]) / 2)
 
 
 def along(sg, u, v):
+    """Segment-local offset -> world: u along the segment from its midpoint, v sideways (yaw + 90 deg)."""
     mx, my = seg_mid(sg)
     return l2w(mx, my, sg['yaw'], u, v)
 
 
 def dist_point_seg(px, py, sg):
+    """Distance (m) from a point to a segment's centreline."""
     (x0, y0), (x1, y1) = sg['p0'], sg['p1']
     dx, dy = x1 - x0, y1 - y0
     t = max(0, min(1, ((px - x0) * dx + (py - y0) * dy) / (dx * dx + dy * dy)))
     return math.hypot(px - (x0 + t * dx), py - (y0 + t * dy))
 
 
+# 50 m bucket index of segments (each registered in its bounding cells plus one cell of padding)
 seg_index = defaultdict(list)
 for i, sg in enumerate(segments):
     (x0, y0), (x1, y1) = sg['p0'], sg['p1']
@@ -527,6 +663,9 @@ for i, sg in enumerate(segments):
 
 
 def road_nearby(px, py, maxd):
+    """True if a road surface comes within `maxd` m of the point (distance to the kerb line, i.e. centreline
+    distance minus half the width). A NEGATIVE maxd asks whether the point lies that far INSIDE a carriageway,
+    which is how props are kept off the road. Only the point's own 50 m bucket is searched."""
     for i in seg_index.get((int(px // 50), int(py // 50)), ()):
         sg = segments[i]
         if dist_point_seg(px, py, sg) <= maxd + sg['w'] / 2:
@@ -535,11 +674,16 @@ def road_nearby(px, py, maxd):
 
 
 # ---- buildings ---------------------------------------------------------------
+# Street-grid yaw = circular mean of the avenue segment directions (Broadway runs diagonally and is excluded).
+# Angles are doubled before averaging because a segment direction is only defined modulo 180 deg.
 _ave = [sg['yaw'] for sg in segments if sg['ave'] and 'BROADWAY' not in sg['name']]
 GRID_SNAP = math.atan2(sum(math.sin(2 * y) for y in _ave), sum(math.cos(2 * y) for y in _ave)) / 2
 
 
 def material_for(h, year, key):
+    """Box material from roof height h (m) and construction year: triplanar brick for low pre-war buildings,
+    triplanar concrete for pre-war towers (reads as limestone), grey for post-war mid-rise and black for post-war
+    glass towers. `key` (the BIN) seeds a stable per-building hash so the mix is varied but reproducible."""
     hv = int(hashlib.md5(key.encode()).hexdigest()[:4], 16) / 65535
     modern = year >= 1950
     if h >= 150:
@@ -552,6 +696,10 @@ def material_for(h, year, key):
 
 
 def try_mesh(lx, ly, h):
+    """Find a textured building mesh and an nx x ny x nz grid of it that fills an lx x ly x h m rectangle with
+    at most ~30 % non-uniform stretch (per-axis scale 0.7..1.45, vertical 0.75..1.45). Returns
+    (row, nx, ny, nz, sx, sy, sz, swap) or None. Single-storey rows (max_stack 1) must match the height within
+    0.7..1.4 outright. Cost = total |log scale| + 0.04 per extra tile, so fewer, less-stretched tiles win."""
     best = None
     for row, (mx, my, mh, max_stack, flat) in MESHES.items():
         if max_stack == 1 and not (0.7 <= h / mh <= 1.4):
@@ -573,6 +721,8 @@ def try_mesh(lx, ly, h):
 
 
 def place_mesh(fit, cx, cy, lx, ly, th):
+    """Place the try_mesh() grid: tiles centred in an nx x ny lattice over the rectangle, stacked nz high (the
+    meshes are ground-pivoted, so each storey sits at k * mh * sz). `swap` rotates the mesh 90 deg."""
     row, nx, ny, nz, sx, sy, sz, swap = fit
     mx, my, mh, _, _ = MESHES[row]
     yaw = th + (math.pi / 2 if swap else 0)
@@ -588,6 +738,9 @@ box_faces = []  # (cx, cy, lx, ly, th, h_tier, kind) of ground-level box tiers: 
 
 
 def tier(kind, cx, cy, z0, h, lx, ly, th, style=None, key=''):
+    """One box tier of a building (bottom z0, height h, m). Ground-level tiers are recorded in `box_faces` (the
+    only true flat facades, used for signage and skybridges); tiers at least 30 m tall and 6 m wide with a window
+    `style` ('punched' or 'glass') are recorded in `facades` for the decal pass."""
     box(kind, cx, cy, z0, h, lx, ly, th)
     stats['boxes'] += 1
     if abs(z0 - Z_GROUND) < 0.01:
@@ -597,6 +750,10 @@ def tier(kind, cx, cy, z0, h, lx, ly, th, style=None, key=''):
 
 
 def rooftop(cx, cy, ztop, lx, ly, th, kind, key, flat=True):
+    """New York roof clutter on a flat roof at ztop (m): a 0.9 m parapet wall on masonry (brick / concrete)
+    roofs at least 8 m wide, a wooden-style water tower (36 % of roofs >= 150 m^2 below 130 m, the silo at
+    0.75..1.1 scale) and one or two elevator bulkheads on roofs >= 90 m^2. Nothing on roofs under 6 m or on
+    pitched meshes (`flat` False). `key` seeds the hash; placement inside the parapet uses the shared rng."""
     if not flat or ztop - Z_GROUND < 6:
         return
     hv = int(hashlib.md5((key + 'roof').encode()).hexdigest()[:6], 16) / 0xFFFFFF
@@ -639,6 +796,10 @@ def rooftop(cx, cy, ztop, lx, ly, th, kind, key, flat=True):
 
 
 def stepped(ring, steps, kind, style, key, crown=None):
+    """Hand-tuned stepped massing for a landmark: `steps` = [(top z m, x fraction, y fraction), ...] of the
+    footprint's minimum rectangle stacked bottom-up, `crown` = [(top z m, diameter m, CYL colour), ...]
+    cylinders on top (spires, antennas). Returns the (cx, cy, lx, ly, th, h, kind) building_rects entry, with h
+    the top of the last step (the crown is not counted)."""
     cx, cy, lx, ly, th = min_rect(ring)
     z = 0.0
     for ztop, fx, fy in steps:
@@ -651,8 +812,12 @@ def stepped(ring, steps, kind, style, key, crown=None):
     return (cx, cy, lx, ly, th, steps[-1][0], kind)
 
 
-building_rects = []  # (cx, cy, lx, ly, th, h, kind)
-all_pts = []
+# Main building pass. For each footprint ring inside the core: landmarks get stepped() massing; otherwise
+# decompose() into rectangles, tile each with textured meshes when try_mesh() fits (only unnamed buildings up to
+# 60 m: named ones are landmarks that keep stone box massing), else a plain box with material_for(). Pre-1960
+# towers of 45..250 m get three "wedding cake" setback tiers (the 1916 zoning look), everything gets rooftop().
+building_rects = []  # (cx, cy, lx, ly, th, h, kind): every building rectangle, for collision and void tests
+all_pts = []  # every projected footprint vertex, for the core ground-slab extent
 for b in buildings:
     h = float(b.get('height_roof') or 0) * FT
     year = int(float(b.get('construction_year') or 0) or 0)
@@ -669,6 +834,7 @@ for b in buildings:
             continue
         all_pts += pts
         stats['buildings'] += 1
+        # Empire State Building: 381 m roof, antenna to 443 m; Chrysler: spire to 319 m; One Vanderbilt: 427 m
         if b['bin'] == ESB_BIN:
             building_rects.append(
                 stepped(
@@ -708,7 +874,7 @@ for b in buildings:
             continue
         kind = material_for(h, year, b['bin'])
         if b.get('name') and kind in ('grey', 'black') and year and year < 1950:
-            kind = 'concrete'
+            kind = 'concrete'  # named pre-war buildings (NYPL, hotels, churches) are stone, never glass
         for cx, cy, lx, ly, th in decompose(pts):
             building_rects.append((cx, cy, lx, ly, th, h, kind))
             fit = (
@@ -730,6 +896,7 @@ for b in buildings:
                 )
                 continue
             style = 'glass' if kind == 'black' else ('punched' if kind in ('concrete', 'brick') else 'glass')
+            # setbacks: 45 % of h at full size, 30 % at 82 % footprint, 25 % at 64 % (empirical proportions)
             if 45 <= h <= 250 and year and year < 1960 and min(lx, ly) >= 14:
                 tier(kind, cx, cy, Z_GROUND, 0.45 * h, lx, ly, th, style, b['bin'])
                 tier(kind, cx, cy, Z_GROUND + 0.45 * h, 0.30 * h, lx * 0.82, ly * 0.82, th, style, b['bin'])
@@ -739,7 +906,7 @@ for b in buildings:
                 tier(kind, cx, cy, Z_GROUND, h, lx, ly, th, style, b['bin'])
                 rooftop(cx, cy, Z_GROUND + h, lx, ly, th, kind, b['bin'] + str(cx))
 
-# spatial index of building rects
+# spatial index of building rects: 40 m buckets, each rect registered in every bucket its bounding circle touches
 rect_index = defaultdict(list)
 for i, (cx, cy, lx, ly, th, h, kind) in enumerate(building_rects):
     r = math.hypot(lx, ly) / 2
@@ -749,6 +916,8 @@ for i, (cx, cy, lx, ly, th, h, kind) in enumerate(building_rects):
 
 
 def building_at(x, y, margin=0.5):
+    """Index into building_rects of a rectangle containing (x, y) (grown by `margin` m on each side), or None.
+    Oriented test in the rectangle's own frame."""
     for i in rect_index.get((int(x // 40), int(y // 40)), ()):
         cx, cy, lx, ly, th, h, kind = building_rects[i]
         c, s = math.cos(th), math.sin(th)
@@ -760,10 +929,13 @@ def building_at(x, y, margin=0.5):
 
 
 def inside_building(x, y, margin=0.5):
+    """True if (x, y) is inside any building rectangle grown by `margin` m. The main "do not place here" test."""
     return building_at(x, y, margin) is not None
 
 
 # ---- ground, roads, sidewalks -----------------------------------------------
+# Core ground slab: a 0.30 m concrete slab with its top at Z_GROUND under the built-up extent (+60 m, clamped to
+# 1040 m so it reaches just past the flyable square). The whole-board slab comes later, 1 cm lower.
 xs = [p[0] for p in all_pts]
 ys = [p[1] for p in all_pts]
 gx0, gx1, gy0, gy1 = (
@@ -776,7 +948,10 @@ box('concrete', (gx0 + gx1) / 2, (gy0 + gy1) / 2, Z_GROUND - 0.30, 0.30, gx1 - g
 
 
 def walk_width(sg, side, off, Lw):
-    """Sidewalk width that reaches the building line (median over samples), clamped 3..14 m."""
+    """Sidewalk width that reaches the building line (median over samples), clamped 3..14 m.
+
+    Five sample points along the usable length Lw (centred at offset `off`) step outwards from the kerb in 0.5 m
+    steps until they hit a building (14 m if none); the median plus 0.3 m overlap is the width for that side."""
     ds = []
     for t in (0.15, 0.35, 0.5, 0.65, 0.85):
         u = off - Lw / 2 + t * Lw
@@ -792,6 +967,11 @@ def walk_width(sg, side, off, Lw):
     return max(3.0, min(14.0, med + 0.3))
 
 
+# Road surfaces and sidewalks per segment. Plaza blocks are raised to sidewalk level and paved. Ordinary roads
+# are asphalt planes whose top (`ztop`) is staggered Broadway 3.5 cm > avenues 3 cm > cross streets 2 cm above
+# Z_GROUND so overlapping surfaces at intersections never z-fight. The asphalt of the first/last segment of a
+# line is extended by half the widest street at the node (ext0/ext1) to fill the intersection; sidewalks are
+# instead CUT back by the same amount (cut0/cut1) so they stop at the kerb line of the crossing street.
 for sg in segments:
     (x0, y0), (x1, y1), w, L, yaw = sg['p0'], sg['p1'], sg['w'], sg['L'], sg['yaw']
     mx, my = seg_mid(sg)
@@ -808,14 +988,14 @@ for sg in segments:
         plane(ASPHALT, bx_, by_, sg['ztop'], L + ext0 + ext1, w, yaw)
         stats['roads'] += 1
         if sg['trafdir'] == 'TW' and L > 20:
-            box('yellow', mx, my, sg['ztop'], 0.01, L - w * 0.9, 0.35, yaw)
+            box('yellow', mx, my, sg['ztop'], 0.01, L - w * 0.9, 0.35, yaw)  # two-way streets: yellow centre line
     cut0 = node_w.get(sg['k0'], w) / 2 if sg['first'] else 0
     cut1 = node_w.get(sg['k1'], w) / 2 if sg['last'] else 0
     Lw = L - cut0 - cut1
     if Lw > 2:
         off = (cut0 - cut1) / 2
-        zt = Z_WALK + (0.01 if sg['ave'] else 0.0)
-        sg['walk'] = {}
+        zt = Z_WALK + (0.01 if sg['ave'] else 0.0)  # avenue pavements 1 cm higher: same z-fighting trick
+        sg['walk'] = {}  # side (+1 / -1) -> (off, Lw, sw, zt): reused by every later street pass
         for side in (1, -1):
             sw = walk_width(sg, side, off, Lw)
             x, y = along(sg, off, side * (w / 2 + sw / 2))
@@ -825,6 +1005,9 @@ for sg in segments:
             sg['walk'][side] = (off, Lw, sw, zt)
 
 # ---- road markings ----------------------------------------------------------
+# Lane lines (1 cm thick white boxes, one per 3.4 m lane, stopping 4 m short of each end) and ladder crosswalks
+# (2.8 x 0.55 m bars every 2.4 m) at the ends that meet a real intersection (node degree >= 3), 2.2 m back from
+# the crossing street's kerb line.
 WHITE = CUBE['default']
 for sg in segments:
     if sg['plaza'] or 'walk' not in sg:
@@ -852,9 +1035,14 @@ for sg in segments:
 
 # ---- street furniture --------------------------------------------------------
 def near_origin(x, y, r=14):
+    """True within r m of the spawn point: keeps the take-off area clear of props, cars and sheds."""
     return math.hypot(x, y) < r
 
 
+# Per sidewalk side: kerb trees (every 24 m on avenues, 20 m elsewhere, 7 m clear at each end, 1.3 m from the
+# kerb), pedestrians (one chance per 2.5 / 7 / 9 m of plaza / avenue / street, 62 % skipped), props against the
+# building line every 40 m; then lamps alternating sides and traffic in the lanes. The +pi/2 and side flips in
+# the yaws orient each mesh's front (empirical per asset).
 for sg in segments:
     if 'walk' not in sg:
         continue
@@ -914,7 +1102,9 @@ for sg in segments:
             continue
         add(lamp, x, y, zt, 1, 1, 1, sg['yaw'] + (math.pi if side < 0 else 0) + math.pi / 2)
         stats['lamps'] += 1
-    # traffic
+    # traffic: one chance per 30 m (avenues) / 50 m, 60 % skipped; 60 % hug a kerb lane (1.6 m in), the rest
+    # anywhere in the carriageway. trafdir 'TF' flows against the digitised direction; 'TW' is two-way, where the
+    # left lanes drive the other way.
     if sg['plaza']:
         continue
     density = 30.0 if sg['ave'] else 50.0
@@ -934,7 +1124,8 @@ for sg in segments:
         add(row, x, y, sg['ztop'] + 0.02, 1, 1, 1, forward + math.radians(fix))
         stats['cars'] += 1
 
-# corners: trash cans, food carts, people waiting
+# corners: trash cans, food carts, people waiting. Each node keeps the widest street meeting there; props are
+# scattered on a ring just outside the carriageway and dropped if they land in a building or on a road.
 corners = {}
 for sg in segments:
     for k, p in ((sg['k0'], sg['p0']), (sg['k1'], sg['p1'])):
@@ -965,7 +1156,9 @@ for k, (p, w) in corners.items():
             add(rng.choice(PEOPLE_STAND), x, y, Z_WALK, 1, 1, 1, rng.uniform(0, 6.28))
             stats['people'] += 1
 
-# sidewalk sheds (scaffolding) along street-facing frontages
+# sidewalk sheds (scaffolding) along street-facing frontages: up to 70 buildings of 14..60 m and >= 12 m tall
+# get one face (the first that is outside other buildings, within 3 m of a road and > 30 m from the spawn) lined
+# with 2.4 m scaffold modules two high. The module's base is 0.57 m below its pivot, hence Z_WALK + 0.6.
 cands = [r for r in building_rects if 14 <= max(r[2], r[3]) <= 60 and r[5] >= 12]
 rng.shuffle(cands)
 sheds = 0
@@ -1007,6 +1200,8 @@ for cx, cy, lx, ly, th, h, kind in cands:
 
 
 # ---- parks (NYC Parks Properties) --------------------------------------------
+# Parks are laid out BEFORE the void filler so nothing else lands on them. Each park polygon is covered with
+# rectangles and dressed by its `typecategory`; Bryant Park is laid out by hand afterwards.
 parks = json.load(open(os.path.join(DATA, 'midtown_parks.json')))
 PLAYGROUND = ['NewRow_287', 'NewRow_288', 'NewRow_289', 'NewRow_293', 'NewRow_295', 'NewRow_296', 'NewRow_643']
 FENCE = 'NewRow_780'  # SM_Fence04 chain link 0.1 x 4 x 2.7 m, Y along the fence
@@ -1014,6 +1209,9 @@ park_rects = []  # (cx, cy, lx, ly, th) for coverage marking
 
 
 def decompose_fine(pts, cell=4.0, max_rects=30):
+    """Cover a polygon with up to `max_rects` rectangles (cx, cy, lx, ly, th) on a `cell` m raster in its
+    minimum-rectangle frame, largest first, until no free rectangle of 2 cells remains. Unlike decompose() it
+    never settles for the single bounding rectangle, so odd-shaped parks keep their outline."""
     cx, cy, lx, ly, th = min_rect(pts)
     c, s = math.cos(th), math.sin(th)
     loc = [((p[0] - cx) * c + (p[1] - cy) * s, -(p[0] - cx) * s + (p[1] - cy) * c) for p in pts]
@@ -1038,6 +1236,9 @@ def decompose_fine(pts, cell=4.0, max_rects=30):
 
 
 def scatter_rect(x, y, lx, ly, th, rows_, n, z, scale=(1, 1), inset=1.0, yaw=None):
+    """Scatter `n` random picks from `rows_` inside a rotated rectangle (shrunk by `inset` m), at height z, with
+    a uniform scale drawn from `scale` and a random yaw unless one is given. Picks that land in a building or
+    near the spawn are dropped, so fewer than n may be placed."""
     for _ in range(n):
         u, v = rng.uniform(-lx / 2 + inset, lx / 2 - inset), rng.uniform(-ly / 2 + inset, ly / 2 - inset)
         px, py = l2w(x, y, th, u, v)
@@ -1049,7 +1250,10 @@ def scatter_rect(x, y, lx, ly, th, rows_, n, z, scale=(1, 1), inset=1.0, yaw=Non
 
 
 def park_paths(x, y, lx, ly, th, z_top, width=2.6, inset=5.0, cross=True):
-    """Gravel perimeter path (inset) and a cross path through the middle."""
+    """Gravel perimeter path (inset) and a cross path through the middle.
+
+    Also a lamp near the middle of each side of the loop and (ix + iy) / 18 benches along the inside edge of
+    the loop, facing the park. Skipped when the rectangle is too small for the loop plus a 6 m middle."""
     if min(lx, ly) < 2 * inset + 6:
         return
     ix, iy = lx - 2 * inset, ly - 2 * inset
@@ -1088,6 +1292,9 @@ def park_paths(x, y, lx, ly, th, z_top, width=2.6, inset=5.0, cross=True):
 
 
 def fence_around(cx, cy, lx, ly, th, z):
+    """Chain-link fence (4 m panels at 0.75 vertical scale = 2 m high) around a rotated rectangle, skipping panels
+    that would stand inside a building. The fence mesh runs along its Y, hence the -pi/2 in the yaw. The Y-scale
+    expression is effectively 1 (n * 4 never exceeds L), so panels are spaced out rather than stretched."""
     for u0, v0, u1, v1 in (
         (-lx / 2, -ly / 2, lx / 2, -ly / 2),
         (-lx / 2, ly / 2, lx / 2, ly / 2),
@@ -1106,8 +1313,12 @@ def fence_around(cx, cy, lx, ly, th, z):
             stats['park_props'] += 1
 
 
-PARK_Z = Z_WALK + 0.02
-bryant = None
+PARK_Z = Z_WALK + 0.02  # park props sit just above the sidewalk level
+bryant = None  # (min_rect, rects) of Bryant Park, kept for the hand layout below
+# Park loop: skip waterfront facilities / esplanades (off the board), tiny or out-of-range polygons. Types:
+# 'Mall' = the Park Avenue planted medians; 'Playground' = paved, play equipment, fenced; 'Triangle/Plaza' =
+# paved with cafe furniture (statue if >= 0.1 acres); anything else is a neighbourhood park with lawn and paths.
+# Prop counts are one per N m^2 of rectangle (empirical densities).
 for pk in parks:
     name = pk.get('signname', '')
     typ = pk.get('typecategory', '')
@@ -1189,7 +1400,11 @@ for pk in parks:
                 scatter_rect(x, y, lx, ly, th, PEOPLE_STAND + PEOPLE_SIT, max(2, int(lx * ly / 45)), PARK_Z)
         if typ == 'Triangle/Plaza' and float(pk.get('acres') or 0) >= 0.1:
             add(STATUE, ccx, ccy, PARK_Z, 0.9, 0.9, 0.9, rng.uniform(0, 6.28))
-# Bryant Park: great lawn, gravel paths, plane-tree allees with tables and chairs, fountain, kiosks
+# Bryant Park: great lawn, gravel paths, plane-tree allees with tables and chairs, fountain, kiosks.
+# Worked in a frame (tha) along the park's LONG axis (u) with Lp x Wp the park rectangle. The park polygon also
+# contains the New York Public Library, so `blocked` finds the u positions a building covers, `runs` the free
+# stretches, and the longest run [a, b_] is the usable park; it is flipped so the open end (where the fountain
+# is, the west end in reality) is at -u. The lawn then spans a+30..b_-12 at half the park width.
 if bryant:
     (cx, cy, lx, ly, th), rects = bryant
     long_u = lx >= ly
@@ -1243,6 +1458,7 @@ if bryant:
                     if rng.random() < 0.5:
                         add(rng.choice(PEOPLE_SIT), tx + 0.9, ty, Z_WALK, 1, 1, 1, rng.uniform(0, 6.28))
     fx, fy = l2w(cx, cy, tha, a + 13, 0)  # fountain at the open end
+    # 9 m basin, a blue "water" slab just below its rim, pedestal and upper bowl, ring of 14 onlookers facing in
     cylinder('grey', fx, fy, Z_WALK, 0.9, 9.0)
     add(CUBE['blue'], fx, fy, Z_WALK + 0.85, 7.6, 7.6, 0.1)
     cylinder('grey', fx, fy, Z_WALK, 2.4, 2.4)
@@ -1250,6 +1466,7 @@ if bryant:
     for i in range(14):
         a = i / 14 * 6.283
         add(rng.choice(PEOPLE_STAND), fx + 7 * math.cos(a), fy + 7 * math.sin(a), Z_WALK, 1, 1, 1, a + math.pi)
+    # kiosks in the four corners, eight lamps down each long side
     for u, v in ((a + 6, Wp / 2 - 4), (a + 6, -Wp / 2 + 4), (b_ - 8, Wp / 2 - 4), (b_ - 8, -Wp / 2 + 4)):
         px, py = l2w(cx, cy, tha, u, v)
         if not inside_building(px, py, 1.0):
@@ -1263,17 +1480,22 @@ if bryant:
     stats['bryant'] = 1
 
 # ---- void filling: parking lots, plazas, rear yards --------------------------
+# A 2 m coverage raster over the core square, axis-aligned with the STREET GRID (not the map axes) so that the
+# rectangles it finds line up with the blocks. `covered` = building, park or street (with margins); `built` =
+# building only, used to find the urban area. Cells that are urban but not covered are voids.
 GRID_YAW = GRID_SNAP  # dominant street-grid orientation
 CELL = 2.0
 N = int(2 * MAX_RANGE / CELL)
 
 
 def to_grid(x, y):
+    """World (x, y) -> grid-frame (u, v) metres (rotated by -GRID_YAW)."""
     u, v = l2w(0, 0, -GRID_YAW, x, y)
     return u, v
 
 
 def from_grid(u, v):
+    """Grid-frame (u, v) metres -> world (x, y)."""
     return l2w(0, 0, GRID_YAW, u, v)
 
 
@@ -1282,6 +1504,8 @@ built = bytearray(N * N)
 
 
 def mark_rect(cx, cy, lx, ly, th, margin, arr):
+    """Set every raster cell of `arr` (N x N bytearray, index i * N + j, cell centres at (i + 0.5) * CELL -
+    MAX_RANGE in the grid frame) whose centre lies in the rotated rectangle grown by `margin` m."""
     gcx, gcy = to_grid(cx, cy)
     r = math.hypot(lx, ly) / 2 + margin
     a = th - GRID_YAW
@@ -1307,7 +1531,8 @@ for sg in segments:
     mx, my = seg_mid(sg)
     wtot = sg['w'] + 2 * (max(v[2] for v in sg['walk'].values()) if 'walk' in sg else 4)
     mark_rect(mx, my, sg['L'] + sg['w'], wtot, sg['yaw'], 1.0, covered)
-# urban mask: 20 m blocks containing buildings, dilated by one block
+# urban mask: 20 m blocks (B = 10 cells) containing buildings, dilated by one block in all 8 directions, so
+# voids are only looked for between buildings and not in open space at the edge of the data
 B = 10
 NB = N // B
 blk = bytearray(NB * NB)
@@ -1329,7 +1554,7 @@ for i in range(N):
     for j in range(N):
         if not covered[i * N + j] and urban[(i // B) * NB + (j // B)]:
             void[i * N + j] = 1
-# connected components
+# connected components of void cells (4-neighbour flood fill), one per patch
 seen = bytearray(N * N)
 comps = []
 for i in range(N):
@@ -1349,6 +1574,8 @@ for i in range(N):
 
 
 def comp_rects(cells, max_rects=6, min_cells=6):
+    """Cover one void component (list of (i, j) cells) with up to `max_rects` grid-aligned rectangles of at least
+    `min_cells` cells -> [(x, y, lx, ly)] in world metres (yaw is implicitly GRID_YAW)."""
     i0, i1 = min(c[0] for c in cells), max(c[0] for c in cells)
     j0, j1 = min(c[1] for c in cells), max(c[1] for c in cells)
     grid = [[False] * (i1 - i0 + 1) for _ in range(j1 - j0 + 1)]
@@ -1371,6 +1598,7 @@ def comp_rects(cells, max_rects=6, min_cells=6):
 
 
 def scatter(x, y, lx, ly, rows_, n, z, scale=(1, 1)):
+    """scatter_rect() for grid-aligned void rectangles (yaw GRID_YAW, 1 m inset), counted as fill_props."""
     for _ in range(n):
         u, v = rng.uniform(-lx / 2 + 1, lx / 2 - 1), rng.uniform(-ly / 2 + 1, ly / 2 - 1)
         px, py = l2w(x, y, GRID_YAW, u, v)
@@ -1381,6 +1609,9 @@ def scatter(x, y, lx, ly, rows_, n, z, scale=(1, 1)):
         stats['fill_props'] += 1
 
 
+# Dress the voids: < 16 m^2 ignored; "big" (>= 420 m^2 with a rectangle >= 12 m wide) become parking lots
+# (60 %) or plazas, the rest rear yards. Lots at least 22 m wide away from the spawn are reserved in
+# `lot_rects` (up to 12) for the FPV construction sites and parking decks later instead of being paved here.
 lot_rects = []
 for cells in comps:
     area = len(cells) * CELL * CELL
@@ -1406,6 +1637,7 @@ for cells in comps:
                 continue  # reserved for FPV sites
             plane(ASPHALT, x, y, Z_GROUND + 0.03, lx, ly, GRID_YAW)
             stats['lots'] += 1
+            # parked cars: rows 6 m apart along the long side, 2.9 m bays, 72 % of bays empty, a lamp in the middle
             along_u = lx >= ly
             span, depth = (lx, ly) if along_u else (ly, lx)
             nrows = max(1, int((depth - 2) // 6.0))
@@ -1455,6 +1687,8 @@ for cells in comps:
             )
 
 # ---- plazas: Times Square and Herald Square --------------------------------
+# The Broadway plaza blocks: cafe tables with two chairs (70 %) or a planter with a bush every 7 m along both
+# edges 3.5 m in from the kerb, and a crowd of one person per 2.5 m of length anywhere on the plaza.
 for sg in segments:
     if not sg['plaza']:
         continue
@@ -1482,7 +1716,8 @@ for sg in segments:
         if not near_origin(x, y):
             add(rng.choice(PEOPLE_STAND), x, y, zt, 1, 1, 1, rng.uniform(0, 6.28))
             stats['people'] += 1
-# statues at Herald / Greeley squares, TKTS red steps at Duffy Square
+# TKTS red steps at Duffy Square: nine 1.25 m treads rising 0.55 m each, 15 m wide, starting 14 m back from the
+# 47th Street node towards 42nd, with two people sitting on each step facing 42nd (the bowtie).
 bway_yaw = math.atan2(duffy[1] - ts42[1], duffy[0] - ts42[0])  # direction 42nd -> 47th along Broadway
 for i in range(9):
     x, y = l2w(duffy[0], duffy[1], bway_yaw, -14 - i * 1.25, 0)
@@ -1493,6 +1728,9 @@ for i in range(9):
         add(rng.choice(PEOPLE_SIT), px, py, Z_WALK + 0.02 + 0.55 * (i + 1), 1, 1, 1, bway_yaw + math.pi)
 
 # ---- Times Square screens, neon, billboards ----------------------------------
+# LED screens go only on true ground-level box facades (box_faces) that look at the Times Square bowtie
+# polyline (Broadway 42nd..47th) or at Herald Square. LED_V is 3 x 8 m with its screen facing local +Y, so a
+# facade whose outward normal is `nyaw` needs yaw nyaw - pi/2.
 ts_poly = ts_nodes
 SCREEN_PRESETS = [
     (1.6, 1.2),
@@ -1504,6 +1742,9 @@ SCREEN_PRESETS = [
 
 
 def signage_faces(target_poly, max_d):
+    """Facades suitable for signage facing `target_poly` within `max_d` m -> [(fx, fy, length, normal_yaw, h, d)]
+    sorted by distance. Only ground-level box tiers >= 14 m tall, faces >= 9 m long, whose outward normal points
+    at the polyline (cosine >= 0.35) and that are not buried in a neighbouring building 1.5 m out."""
     out = []
     for cx, cy, lx, ly, th, h, kind in box_faces:
         if h < 14 or dist_to_polyline(cx, cy, target_poly)[0] > max_d:
@@ -1520,6 +1761,8 @@ def signage_faces(target_poly, max_d):
     return out
 
 
+# up to three varied screens per facade (one slot per 11 m), 4.5..24 m up but below the roof; neon tubes at
+# 3.8 m on the first 60 facades wider than 12 m
 screen_facades = signage_faces(ts_poly, 110)
 neon_count = 0
 for fx, fy, length, nyaw, h, dd in screen_facades:
@@ -1547,17 +1790,26 @@ for fx, fy, length, nyaw, h, dd in screen_facades:
                 nyaw + math.pi / 2,
             )
             neon_count += 1
-for fx, fy, length, nyaw, h, dd in screen_facades[:4]:  # a few giant screens closest to the bowtie
+for fx, fy, length, nyaw, h, dd in screen_facades[:4]:  # a few giant screens (15 x 32 m) closest to the bowtie
     if h > 45 and length > 20:
         add(LED_V, fx + 0.1 * math.cos(nyaw), fy + 0.1 * math.sin(nyaw), Z_GROUND + 26, 5.0, 1, 4.0, nyaw - math.pi / 2)
         stats['screens'] += 1
+# Herald Square: ten 6 x 12.8 m screens on the nearest facades (a 1 m stub polyline stands in for the square)
 for fx, fy, length, nyaw, h, dd in signage_faces([herald, (herald[0] + 1, herald[1] + 1)], 90)[:10]:
     add(LED_V, fx, fy, Z_GROUND + rng.uniform(5, 12), 2.0, 1, 1.6, nyaw - math.pi / 2)
     stats['herald_screens'] += 1
 
 
 # ---- decals (variant): windows + billboards -----------------------------------
+# Window-grid and billboard textures are generated PNGs projected onto facades as wall decals (the editor's
+# custom-decal loader, as Workshop maps use). Grid sizes are bucketed so only a few hundred distinct PNGs are
+# written. Collected into `decal_rows` / `decal_files` and only written when WITH_WINDOWS.
 def window_png(style, cols, rows, path):
+    """Write a cols x rows window-grid texture (48 px cells, transparent background) to `path`.
+
+    'punched': inset dark window panes with a light sill line and a pale frame (masonry buildings).
+    Otherwise (curtain wall / 'glass'): full-cell blue glass with a darker spandrel band over the bottom 26 % and
+    light mullion lines. A sine shading per row breaks up the repetition."""
     from PIL import Image, ImageDraw
 
     cw, ch = 48, 48
@@ -1603,6 +1855,9 @@ BILLBOARD_TEXT = [
 
 
 def billboard_png(i, path):
+    """Write billboard texture number `i` (768 x 480): a two-colour gradient, a few translucent blobs, a word
+    from BILLBOARD_TEXT in Impact (falls back to PIL's default font) and a dark border. Seeded by `i` so the
+    same number always gives the same artwork."""
     from PIL import Image, ImageDraw, ImageFont
 
     r = random.Random(i)
@@ -1634,16 +1889,23 @@ def billboard_png(i, path):
     img.save(path)
 
 
+# allowed window-grid sizes (columns x rows); each distinct pair becomes one PNG shared by every matching facade
 COLS_B = [3, 4, 5, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32]
 ROWS_B = [6, 8, 10, 12, 15, 18, 22, 26, 30, 36, 42, 50, 60, 72, 85, 100]
 
 
 def nearest(v, buckets):
+    """The bucket value closest to v."""
     return min(buckets, key=lambda b: abs(b - v))
 
 
-decal_rows = {}
-decal_files = {}
+# Window decals: one per outer face of every recorded facade tier. Rows = height / floor pitch (3.6 m punched,
+# 4.0 m glass), columns = width / window module (2.6 m punched, 1.6 m glass). A face is skipped as a party wall
+# when a building rectangle 0.8 m outside it reaches at least half way up this tier. The decal's row name IS
+# the PNG filename (fixed numeric stamp + md5 of the grid key); Scale3D = (2 m depth, h / 4, length / 4) and
+# the pivot is the face centre at mid-height.
+decal_rows = {}  # decal row name (PNG filename) -> transforms, merged into the map by write_map()
+decal_files = {}  # PNG filename -> ('win', style, cols, rows) or ('bb', index), rendered by write_map()
 for cx, cy, z0, h, lx, ly, th, style, key in facades:
     fl = 3.6 if style == 'punched' else 4.0
     wm = 2.6 if style == 'punched' else 1.6
@@ -1659,6 +1921,8 @@ for cx, cy, z0, h, lx, ly, th, style, key in facades:
         decal_files[name] = ('win', style, cols_n, rows_n)
         add(name, fx, fy, z0 + h / 2, 2.0, h / 4, length / 4, rot=decal_rot(nyaw), store=decal_rows)
         stats['win_decals'] += 1
+# Billboard decals on the Times Square facades >= 36 m tall and 14 m wide: 9 x 14.4 m (scale 2.25 x 3.6) at 32 m
+# and 52 m up (capped 10 m below the roof, dropped below 14 m), cycling through twelve generated artworks.
 for idx, (fx, fy, length, nyaw, h, dd) in enumerate(screen_facades):
     if h < 36 or length < 14:
         continue
@@ -1675,6 +1939,8 @@ for idx, (fx, fy, length, nyaw, h, dd) in enumerate(screen_facades):
 
 
 # ---- FPV fun: construction skeletons, open parking decks, skybridges ---------
+# Things to fly through. The reserved void lots (largest first, at least 22 m wide, > 60 m from the spawn and
+# inside 820 m) become four construction sites and three parking decks, each capped at 60 x 60 m.
 CRANES = ['NewRow_338', 'NewRow_335']  # BP_YellowCrane_C, BP_RedCrane_C
 CONTAINER, FORKLIFT, MIXER, TOILET = 'NewRow_190', 'NewRow_196', 'NewRow_191', 'NewRow_188'
 lot_rects_big = sorted(
@@ -1688,6 +1954,10 @@ lot_rects_big = sorted(
 
 
 def construction_site(x, y, lx, ly, th, floors):
+    """Open concrete skeleton on a dirt lot: `floors` storeys of 3.6 m with 0.55 m columns on a ~7 m grid (6 %
+    missing) and a slab on every floor except, half the time, the top one; a stair core, a tower crane in one
+    corner, a chain-link fence, scaffolding three high along one side, and scattered plant, containers,
+    cones, a forklift and workers. The lot is lx x ly m centred at (x, y) with yaw th; columns are inset 2 m."""
     fh = 3.6
     ix, iy = lx - 4, ly - 4
     plane(DIRT, x, y, Z_GROUND + 0.03, lx, ly, th)
@@ -1730,6 +2000,10 @@ def construction_site(x, y, lx, ly, th, floors):
 
 
 def parking_deck(x, y, lx, ly, th, levels):
+    """Open multi-storey car park: `levels` decks of 3.2 m. Level 0 is asphalt, every deck above is a 0.35 m
+    concrete slab with 1 m parapets; 0.5 m columns on an ~8 m grid hold up the next deck, a 4 m wide ramp along
+    the long side climbs to it (so a drone can follow the ramp up), parked cars line both sides of each level
+    (50 % of bays) and a lamp sits in the middle. No roof above the top deck."""
     dh = 3.2
     along_u = lx >= ly
     for k in range(levels + 1):
@@ -1790,7 +2064,10 @@ for i, (x, y, lx, ly) in enumerate(lot_rects_big[:7]):
         construction_site(x, y, min(lx, 60), min(ly, 60), GRID_YAW, rng.randint(5, 9))
     else:
         parking_deck(x, y, min(lx, 60), min(ly, 60), GRID_YAW, rng.randint(3, 4))
-# skybridges between facing box buildings across a street
+# skybridges between facing box buildings across a street: from a ground-level box face >= 24 m tall, probe
+# along its outward normal every 2 m from 6 to 44 m; the first building hit must be >= 16 m away (a street
+# width) and >= 24 m tall, with a road at the midpoint. The deck is a floor slab, a roof slab and a glazed
+# (blue cube) box 2.4 m tall at a random height 14 m .. (lower roof - 6 m). At most 12, none within 80 m of spawn.
 bridges = 0
 rng.shuffle(box_faces)
 for cx, cy, lx, ly, th, h, kind in box_faces:
@@ -1819,6 +2096,11 @@ for cx, cy, lx, ly, th, h, kind in box_faces:
         break
 
 # ---- Park Avenue viaduct and other elevated roadways -------------------------
+# The centreline file's level codes: 13 = at grade (built above), 17 / 21 / 22 = elevated. LEVEL_Z gives each
+# elevated code a deck height (m, empirical: the viaduct round Grand Central). A line whose ends have different
+# levels is a ramp: z is interpolated linearly along its length (unknown codes count as 0.3 m, i.e. ground),
+# built from pitched slabs; level stretches are flat black boxes. Both get 1 m grey parapets and concrete piers
+# every 14 m wherever the deck is above 2.5 m and not inside a building. Code 9 lines are skipped.
 LEVEL_Z = {'17': 7.5, '21': 11.0, '22': 8.5}
 for st in streets:
     f, t = st.get('from_level_code'), st.get('to_level_code')
@@ -1868,16 +2150,20 @@ for st in streets:
             stats['viaduct'] += 1
 
 # ---- whole board: mid ring (1-2 km) and outer ring (2-3 km), rivers -----------
-BOARD = 3000.0
+# The Empty board is a flat 6 km square; the flyable box is the central 2 km. Beyond it: the mid ring gets every
+# building over 5 m as a box, roads with sidewalks and street trees, parks with paths; the outer ring gets
+# buildings over 14 m, roads and lawns. The ring datasets were fetched for a +-4.3 km square (README).
+BOARD = 3000.0  # half-size of the board, m
 
 
 def zone(x, y):
+    """'core' (|x|,|y| <= 1 km), 'mid' (<= 2 km), 'outer' (<= 2.96 km) or None beyond the board."""
     d = max(abs(x), abs(y))
     return 'core' if d <= MAX_RANGE else ('mid' if d <= 2000 else ('outer' if d <= BOARD - 40 else None))
 
 
 box('concrete', 0, 0, Z_GROUND - 0.31, 0.30, 2 * BOARD, 2 * BOARD)  # ground slab under the whole board
-# buildings
+# buildings: plain boxes on best_rect() footprints; core footprints are skipped (already built in full)
 ring = json.load(open(os.path.join(DATA, 'ring_buildings.json')))
 for b in ring:
     h = float(b.get('height_roof') or 0) * FT
@@ -1899,7 +2185,8 @@ for b in ring:
         cx, cy, lx, ly, th = best_rect(pts)
         box(material_for(h, year, b['bin']), cx, cy, Z_GROUND, h, lx, ly, th)
         stats['ring_' + zn] += 1
-# streets: mid ring gets roads + sidewalks + sparse trees, outer ring roads only
+# streets: mid ring gets roads + sidewalks + sparse trees, outer ring roads only. Same filters and intersection
+# extension as the core streets, but fixed 4.5 m sidewalks and a tree every 32 m alternating sides.
 rstreets = json.load(open(os.path.join(DATA, 'ring_streets.json')))
 rnode_w = {}
 for st in rstreets:
@@ -1955,7 +2242,9 @@ for st in rstreets:
                         tx, ty = l2w(mx, my, yaw, u, side * (w / 2 + 1.3))
                         add(ELM if rng.random() < 0.6 else MAPLE, tx, ty, Z_WALK, 1, 1, 1, rng.uniform(0, 6.28))
                         stats['ring_trees'] += 1
-# parks outside the core: lawns and trees
+# parks outside the core: lawns and trees (one per 110 m^2 in the mid ring, 300 m^2 outer), plus paths, bushes
+# and rocks (rows 71 / 162 are rocks), benches and people in the mid ring. Polygons that cross the board edge
+# (Central Park) are clipped first; 6 m raster, up to 60 rectangles each.
 rparks = json.load(open(os.path.join(DATA, 'ring_parks.json')))
 for pk in rparks:
     typ = pk.get('typecategory', '')
@@ -2000,7 +2289,7 @@ for pk in rparks:
             stats['ring_parks'] += 1
 # rivers: water tiles wherever the shoreline-clipped census tracts show no land
 tracts = json.load(open(os.path.join(DATA, 'land_tracts.json')))
-land_polys = []
+land_polys = []  # (xmin, xmax, ymin, ymax, pts): bbox-prefiltered land polygons
 for t in tracts:
     g = t['the_geom']
     polys = g['coordinates'] if g['type'] == 'MultiPolygon' else [g['coordinates']]
@@ -2022,12 +2311,15 @@ for pk in rparks:  # parks are land too: the 2020 tracts leave Central Park unco
 
 
 def on_land(x, y):
+    """True if (x, y) lies in any land tract or park polygon (bounding-box test first)."""
     for x0, x1, y0, y1, pts in land_polys:
         if x0 <= x <= x1 and y0 <= y <= y1 and point_in_poly(x, y, pts):
             return True
     return False
 
 
+# 100 m water tiles (the 4 m BP_meWater scaled 25x, 3x deep) outside the core wherever none of nine sample
+# points (centre and +-33 m) is on land. The pivot is the water SURFACE, so Z_WATER is the surface height.
 TILE = 100.0
 Z_WATER = Z_GROUND + 0.10  # water surface: above the board (0.012) and the slabs
 for i in range(int(2 * BOARD / TILE)):
@@ -2042,6 +2334,7 @@ for i in range(int(2 * BOARD / TILE)):
 
 # ---- output ------------------------------------------------------------------
 def tf(x, y, z, rot):
+    """Transform dict (metres -> cm, unit scale) with a given rotation quaternion, for Race / CamLoc."""
     return dict(
         Rotation=rot,
         Translation=dict(X=round(x * 100, 2), Y=round(y * 100, 2), Z=round(z * 100, 2)),
@@ -2049,12 +2342,16 @@ def tf(x, y, z, rot):
     )
 
 
+# menu camera: 520 m along -X and 470 m along +Y from the ESB at 170 m, aimed at a point 150 m up its shaft
 cam = (esb_x - 520.0, esb_y + 470.0, 170.0)
 cam_yaw = math.degrees(math.atan2(esb_y - cam[1], esb_x - cam[0]))
 cam_pitch = math.degrees(math.atan2(150 - cam[2], math.hypot(esb_x - cam[0], esb_y - cam[1])))
 
 
 def thumbnail(path, title):
+    """Render a 1024 px top-down Thumbnail.jpg of the core extent: every box, floor, mesh tile and tree footprint
+    as a filled polygon (map +Y to the right, +X up), painted lowest first so tall buildings end up on top,
+    masonry shaded lighter with height. Skips the huge ground slabs and thin floor surfaces."""
     from PIL import Image, ImageDraw
 
     W = 1024
@@ -2064,6 +2361,7 @@ def thumbnail(path, title):
     sc = W / span
 
     def px(x, y):
+        """World metres -> image pixels (+Y right, +X up, centred on the core extent)."""
         return ((y - (gy0 + gy1) / 2) * sc + W / 2, W / 2 - (x - (gx0 + gx1) / 2) * sc)
 
     colors = dict(
@@ -2127,6 +2425,14 @@ def thumbnail(path, title):
 
 
 def write_map(folder, display, extra_rows=None, decals=None):
+    """Write maps/<folder>/ (<folder>.json, .info, Thumbnail.jpg, Decals/) and install a copy into the game's
+    MapEditor/User/<folder>/, replacing any previous build of both. Returns (installed path, instance count).
+
+    The JSON follows the measured map format: S_AssetsTransform rows, BaseMapRow 'BaseBoard' (flat Empty board),
+    an empty Race (Track: false in the .info, so the drone spawns at the board's PlayerStart), CamLoc = the menu
+    camera and CustomWeather.northyaw = FRAME_ROT in degrees. `extra_rows` (the decal transforms) are merged in
+    and `decals` (PNG name -> spec) are rendered and also copied into the editor's UserDecals and MapDecals
+    libraries, which is where it loads user PNGs from."""
     rows_all = dict(instances)
     if extra_rows:
         rows_all.update(extra_rows)

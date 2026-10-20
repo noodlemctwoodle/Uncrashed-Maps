@@ -7,7 +7,31 @@ name, size L x W x H (m), where the pivot sits (base / centre / top / offset), b
 triplanar material, whether a macOS material override exists (meshes without one may render grey on Mac: Bp_Grass),
 hidden-in-editor, blueprint component count, and semantic tags (tree, bush, rock, vehicle, person, building, house,
 industrial, container, furniture, lamp, sign, fence, barrier, sport, water, ground, shape, decal, neon, crane, ...)
-so a generator can ask tools/assets.py for e.g. `find('tree', max_h=12)`."""
+so a generator can ask tools/assets.py for e.g. `find('tree', max_h=12)`.
+
+Usage
+    python3 tools/build_index.py     (any working directory; needs Pillow; rewrites data/asset_index.json,
+                                      docs/ASSETS.md and data/asset_thumbs/)
+
+Inputs
+    ``data/dt_assets.json`` (table rows; column names carry Blueprint ``_<index>_<GUID>`` suffixes, matched by
+    prefix), ``data/catalog.json`` (bounds in cm from tools/build_catalog.py + tools/bounds_fix.py), the extracted
+    ``E_AssetsCategory.uasset``/``.uexp`` for category names and the thumbnail ``.ubulk`` files (256 x 256 DXT5,
+    top mip = first 65536 bytes; block layout documented in tools/thumbs.py).
+Outputs
+    ``data/asset_index.json``: ``{row: {id, name, source, path, kind, category, size_m, pivot, base_offset_m,
+    collision, physics, triplanar, mac_material, hidden, bounds_estimated, components, tags, thumbnail}}``.
+    ``docs/ASSETS.md``: one table per tag (largest first), rows in numeric order, no images.
+    ``data/asset_thumbs/<row>.png`` (128 px) and ``sheet_<tag>.png`` contact sheets.
+
+Derived fields
+    size_m = 2 * extent / 100 per axis. base_offset_m = (origin.z - extent.z) / 100 = mesh bottom relative to the
+    pivot (positive: the mesh hovers when its pivot is put on the ground, e.g. the boxcar +0.68; negative: it sinks,
+    which trees, rocks and buildings are designed to do). pivot = 'base' when the bottom is within 0.12 m of the
+    pivot, 'top' when the top is, 'centre' when |bottom + top| is under 15 % of the height, else 'offset'
+    (thresholds empirical). Tags come from ``TAG_RULES`` regexes on the lower-cased mesh/blueprint name plus the
+    category overrides in ``tags_for``.
+"""
 
 import json, os, re, sys, collections, struct
 
@@ -17,6 +41,7 @@ DATA = os.path.join(ROOT, 'data')
 
 
 def rnum(r):
+    """Sort key for row names: the number of ``NewRow_<n>``; other names sort after all of them (hash-spread)."""
     m = re.match(r'NewRow_(\d+)$', r)
     return int(m.group(1)) if m else 10**6 + abs(hash(r)) % 10**5
 
@@ -28,17 +53,26 @@ cat = json.load(open(os.path.join(DATA, 'catalog.json')))
 
 
 def field(r, prefix):
+    """Value of the first column of row ``r`` whose name starts with ``prefix`` (None if none matches)."""
     return next((v for k, v in r.items() if k.startswith(prefix)), None)
 
 
 # category names: the enum's DisplayNameMap values appear in the uexp in enumerator order
 def enum_names(path):
+    """Map ``E_AssetsCategory::NewEnumerator<i>`` to the enum's display names.
+
+    Heuristic (empirical): the display names are the printable strings of 3-40 chars in the ``.uexp`` that are
+    neither ``None``, ``NewEnumerator*`` nor ``E_*`` and either start with a capital and contain a space ("Small
+    structure", "Big structure", "Basic shape") or are one of the known single-word categories; they occur in
+    enumerator order. Returns {} when the asset cannot be opened. The ``.uasset`` must exist next to the ``.uexp``.
+    """
     try:
         a = Asset(path)
     except Exception:
         return {}
     raw = open(path.replace('.uasset', '.uexp'), 'rb').read()
     strs = [s.decode('utf-8', 'ignore') for s in re.findall(rb'[\x20-\x7e]{3,40}', raw)]
+    # Note the precedence: (not None and not NewEnumerator* and not E_* and capitalised and has a space) OR known.
     names = [
         s
         for s in strs
@@ -101,6 +135,12 @@ TAG_RULES = [  # (tag, regex on the lower-cased mesh/blueprint name)
 
 
 def tags_for(name, category):
+    """Semantic tags for a mesh/blueprint object ``name`` in editor ``category`` (display name).
+
+    Every matching ``TAG_RULES`` regex contributes a tag (a row can carry several); untagged Foliage rows become
+    'tree', Decals rows are exactly ['decal'], Basic shape rows always include 'shape', and anything else left
+    untagged is ['prop'].
+    """
     n = name.lower()
     t = [tag for tag, rx in TAG_RULES if re.search(rx, n)]
     if category == 'Foliage' and not t:
@@ -113,6 +153,8 @@ def tags_for(name, category):
 
 
 def human(name):
+    """Readable name from an asset object name: strip SM_/S_/BP_/KB3D_NDB_ prefixes and _me/_C suffixes, split
+    camelCase and underscores into words, collapse whitespace."""
     n = re.sub(r'^(sm_|s_|bp_|kb3d_ndb_)', '', name, flags=re.I)
     n = re.sub(r'_me$|_c$', '', n, flags=re.I)
     n = re.sub(r'([a-z])([A-Z])', r'\1 \2', n).replace('_', ' ')
@@ -128,6 +170,7 @@ for rn, r in rows.items():
     b = e.get('bounds')
     size = base = pivot = None
     if b:
+        # Catalog bounds are centre (origin) and half extents in cm; convert to full metres and classify the pivot.
         ex = b['extent']
         o = b['origin']
         size = [round(2 * ex[0] / 100, 2), round(2 * ex[1] / 100, 2), round(2 * ex[2] / 100, 2)]
@@ -170,7 +213,10 @@ os.makedirs(TH, exist_ok=True)
 
 
 def bc1_colors(c0, c1):
+    """Four-entry RGB palette of a BC1 colour block from RGB565 endpoints (same as tools/thumbs.py)."""
+
     def rgb(c):
+        """Split a 16-bit RGB565 value into an 8-bit (r, g, b) tuple."""
         return ((c >> 11) * 255 // 31, ((c >> 5) & 63) * 255 // 63, (c & 31) * 255 // 31)
 
     a, b = rgb(c0), rgb(c1)
@@ -178,6 +224,11 @@ def bc1_colors(c0, c1):
 
 
 def decode_bc3(data, w, h):
+    """Decode ``w`` x ``h`` texels of BC3 (DXT5) block data into an RGB ``Image``.
+
+    16 bytes per 4 x 4 block, row-major: 8 bytes alpha (skipped) + BC1 colour block (c0, c1 u16 RGB565, u32 of
+    2-bit indices, texel i at bits 2i..2i+1).
+    """
     img = Image.new('RGB', (w, h))
     px = img.load()
     off = 0
@@ -192,6 +243,7 @@ def decode_bc3(data, w, h):
     return img
 
 
+# Per-row 128 px PNGs, decoded once and cached on disk (the first 65536 bytes of a .ubulk are the 256 x 256 top mip).
 thumbs = {}
 for rn in index:
     f = os.path.join(SRC, rn + '.ubulk')
@@ -206,6 +258,7 @@ for rn, e in index.items():
         by_tag[t].append(rn)
 for t, lst in by_tag.items():  # one contact sheet per tag
     lst = sorted(lst, key=rnum)
+    # 8 columns of 136 x 170 px cells: 128 px thumbnail with a 4 px margin and two caption lines.
     COLS = 8
     CW, CH = 136, 170
     n = len(lst)
@@ -234,6 +287,7 @@ lines = [
     'is normal. The exception is Bp_Grass (R663), which has no override and renders grey on Mac: use green cubes for lawns.',
     '',
 ]
+# One section per tag, largest tag first; rows in numeric order.
 for t in sorted(by_tag, key=lambda k: -len(by_tag[k])):
     lines += [
         f'## {t} ({len(by_tag[t])})',

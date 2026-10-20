@@ -1,4 +1,31 @@
-"""Quick oblique preview of a generated map: draws every box/mesh as a shaded prism with a painter's algorithm."""
+"""Quick oblique preview of a generated map: draws every box/mesh as a shaded prism with a painter's algorithm.
+
+usage: python3 tools/preview.py <map.json> <out.png> [cx cy radius]
+    cx cy radius   world centre of the view and its radius, metres (default 0, -60, 260). Instances further than
+                   1.3 * radius from the centre are not drawn.
+
+Run from the repo root: `data/catalog.json` is opened by a relative path. Needs Pillow. This is a script, not a
+library (topdown.py re-reads its source text for the COL palette rather than importing it, precisely because
+importing would run it).
+
+Output: a 1600 x 1100 PNG. Every instance is a right prism: the footprint is the catalog's full extent (2 x
+half-extent) scaled by Scale3D and rotated by the yaw, the base sits at the pivot plus the mesh's base offset, and
+the four walls are shaded by their facing while the top is slightly brighter. Colours are per asset row (COL),
+magenta for rows not in the table.
+
+Units: the JSON is Unreal cm, Z up; `dims()` returns metres and everything in the projection is metres.
+
+Conventions relied on
+  - Yaw = 2 * atan2(q.Z, q.W); pitch and roll are ignored (every instance is drawn upright).
+  - Pivots: the translation is the actor pivot, so the base offset (`zoff`, metres, mesh-local Z of the lowest point
+    relative to the pivot) is what puts the prism on the ground: centre-pivot primitives are at -lz/2, the concrete
+    floor R303 is top-pivoted (-0.29), the brick wall R318 base-pivoted (0), water R183 has its pivot at the surface
+    (-2.05, the 2.1 m deep tile) and 4 x 4 x 0.1 m ground planes are centre-pivoted (-0.05). Everything else uses the
+    catalog bounds (`origin.z - extent.z`).
+  - Camera: fixed oblique view from the -X-Y side looking toward +X+Y at 38 deg elevation; +X runs to screen-right,
+    +Y to screen-left, both away from the viewer. Note that `depth` from project() grows toward the viewer, so the
+    solids' sort key (-mean depth, ascending) paints nearest first; documented as observed, not changed.
+"""
 
 import json, math, sys
 from PIL import Image, ImageDraw
@@ -10,12 +37,20 @@ cat = json.load(open('data/catalog.json'))
 
 
 def dims(row):
+    """(size_x, size_y, size_z, zoff) in metres for an asset row at scale 1.
+
+    The sizes are the full extents (twice the catalog half-extents); zoff is the local Z of the mesh's lowest point
+    relative to the pivot, so the prism base is `translation.z + zoff * scale.z`. The hard-coded rows are the ones
+    whose pivot is not at the centre (see the module docstring); rows without catalog bounds fall back to a 1 m cube
+    with a centre pivot.
+    """
     if row == 'NewRow_303':
         return (4, 4, 0.30, -0.29)
     if row == 'NewRow_318':
         return (0.3, 4, 4, 0)
     if row == 'NewRow_183':
         return (4, 4, 2.1, -2.05)
+    # SM_BaseGround ground planes: 4 x 4 x 0.1 m, centre pivot.
     if row in (
         'NewRow_180',
         'NewRow_181',
@@ -40,6 +75,9 @@ def dims(row):
     return (1, 1, 1, -0.5)
 
 
+# Fill colour per asset row (RGB). Chosen by eye to resemble the in-game material (concrete, brick, foliage, water,
+# coloured cubes...). Rows listed twice keep the later value (Python dict literal semantics); unlisted rows draw
+# magenta so they stand out.
 COL = {
     'NewRow_303': (185, 178, 162),
     'NewRow_318': (150, 88, 66),
@@ -197,12 +235,21 @@ COL = {
     'NewRow_165': (220, 60, 60),
 }
 W, H = 1600, 1100
-# oblique camera: look toward +X? We view from the south-east (-X,+Y) looking north-west, 35 deg elevation
+# Oblique camera: azimuth -135 deg puts the viewer on the -X-Y side looking toward +X+Y (so +X is screen-right and
+# +Y screen-left), 38 deg above the horizon.
 az = math.radians(-135)
 el = math.radians(38)
 
 
 def project(x, y, z):
+    """World (x, y, z) metres -> (screen_x, screen_y, depth).
+
+    u is the screen-right axis and v the ground axis pointing away from the viewer, both from rotating the offset
+    from the view centre by the azimuth; the screen y mixes v (foreshortened by sin(el)) with z (scaled by cos(el)),
+    hung from a horizon line at 62 % of the image height. Scale: the image width spans 2.4 * radius metres.
+    `depth` is the offset along the azimuth direction plus 0.3 * z (empirical bias so taller geometry sorts later)
+    and is used only as the painter's sort key; it is positive toward the viewer with this azimuth.
+    """
     dx, dy = x - cx0, y - cy0
     u = -dx * math.sin(az) + dy * math.cos(az)
     v = -(dx * math.cos(az) + dy * math.sin(az))
@@ -211,11 +258,12 @@ def project(x, y, z):
     return (W / 2 + u * sc, H * 0.62 - (v * math.sin(el) + z * math.cos(el)) * sc, depth + z * 0.3)
 
 
+# Collect one (row, x, y, base_z, size_x, size_y, size_z, yaw) record per drawable instance, all in metres.
 items = []
 for a in m['S_AssetsTransform']:
     row = a['Rname']
     if row.startswith('decal_'):
-        continue
+        continue  # decal rows are named after their PNG; they are images on other surfaces, not solids
     bx, by, bz, zoff = dims(row)
     for t in a['Transform']:
         s = t['Scale3D']
@@ -226,7 +274,10 @@ for a in m['S_AssetsTransform']:
         if lx > 1500 and row not in ('NewRow_268', 'NewRow_303'):
             continue  # huge ground slabs (park lawn base, city slab) are drawn as ground
         yaw = 2 * math.atan2(t['Rotation']['Z'], t['Rotation']['W'])
+        # Base of the prism: pivot + scaled base offset. The R303 branch is the same number as its dims() zoff
+        # (-0.29), kept explicit because the floor is top-pivoted.
         z0 = z + zoff * s['Z'] if row not in ('NewRow_303',) else z - 0.29 * s['Z']
+        # Centre-pivot primitives (coloured cubes, cylinders and the other 1 m shapes): base is half the height down.
         if row in (
             'NewRow_13',
             'NewRow_256',
@@ -247,6 +298,14 @@ d = ImageDraw.Draw(img)
 
 
 def prism(row, x, y, z0, lx, ly, lz, yaw):
+    """Five shaded faces (four walls then the top) of an upright box as [(projected points, RGB colour), ...].
+
+    x, y: pivot in m; z0: base height in m; lx, ly, lz: full sizes in m; yaw: radians. Each wall's brightness is
+    0.55 + 0.45 * max(0, cos(angle between its outward normal and the light from (0.3, -0.95) in world XY)), so walls
+    facing roughly -Y are lit and the rest are at 55 %. The top is the base colour brightened by 5 %, clamped to 255.
+    Which side of a wall counts as "outward" depends on the corner winding, which is fixed here, so the shading is
+    consistent across instances.
+    """
     c, s = math.cos(yaw), math.sin(yaw)
     corners = [
         (x + ux * c - vy * s, y + ux * s + vy * c)
@@ -269,6 +328,9 @@ def prism(row, x, y, z0, lx, ly, lz, yaw):
     return faces
 
 
+# Painter's pass. Each polygon gets a two-part key: group 0 for "flat" items (under 0.5 m tall: ground planes, floors,
+# roads), ordered by their top height so stacked layers come out in order, then group 1 for solids ordered by the
+# negated mean depth of the face (see project() for which way that runs).
 polys = []
 for it in items:
     for pts, col in prism(*it):
