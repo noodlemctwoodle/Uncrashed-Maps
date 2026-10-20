@@ -205,11 +205,13 @@ def cafe(kit, x, y, yaw):
 
 @prefab("stairs_and_terrace", 16)
 def stairs_and_terrace(kit, x, y, yaw, rise=4.4):
-    """A raised terrace (embankment with retaining walls and a parapet) and a real flight of stairs down."""
+    """A raised terrace (a solid concrete mound faced with retaining-wall panels, a parapet on top) and a real
+    flight of stairs down its front. A 0.6 m plate at terrace height read as a floating slab in the game."""
     g = kit.g(x, y)
-    kit.box("concrete", *l2w(x, y, yaw, -10, 0), g + rise - 0.6, 0.6, 20, 20, yaw)
+    kit.box("concrete", *l2w(x, y, yaw, -10, 0), g - 0.3, rise + 0.3, 20, 20, yaw)  # a solid mound, not a plate
     kit.surface("flagstone", *l2w(x, y, yaw, -10, 0), 20, 20, yaw, z_base=g + rise - 0.6)
-    kit.wall([l2w(x, y, yaw, 0, -10), l2w(x, y, yaw, 0, 10)], "retaining", rise)
+    for face in ([(0, -10), (0, 10)], [(0, 10), (-20, 10)], [(-20, 10), (-20, -10)], [(-20, -10), (0, -10)]):
+        kit.wall([l2w(x, y, yaw, u, v) for (u, v) in face], "retaining", rise)
     kit._raised_parapet([l2w(x, y, yaw, -0.5, -10), l2w(x, y, yaw, -0.5, 10)], g + rise)
     fx, fy = l2w(x, y, yaw, 8.6 * rise / 5.67, 0)
     kit.stairs(fx, fy, yaw + math.pi, rise, 6.0)
