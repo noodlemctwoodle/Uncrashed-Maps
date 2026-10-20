@@ -99,6 +99,12 @@ def check(name):
             if road_dist(x, y) > 0.3:
                 fails.append(f"{row} standing on the carriageway at ({x:.1f},{y:.1f})")
                 break
+    # walls never stand on a carriageway (a road cut's walls must break where a drive crosses)
+    for t in inst.get("NewRow_2", []):
+        fp = footprint("NewRow_2", t)
+        if road_dist(fp[0], fp[1]) > 0.2:
+            fails.append(f"retaining wall panel on the carriageway at ({fp[0]:.1f},{fp[1]:.1f})")
+            break
     # stairs: the top landing must meet a deck or terrace edge (something solid within 0.6 m at that height)
     tops = []
     for row, ts in inst.items():

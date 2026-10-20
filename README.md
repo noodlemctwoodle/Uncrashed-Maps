@@ -1,266 +1,225 @@
 # Uncrashed map tooling
 
-Generates custom maps for **Uncrashed: FPV Drone Simulator** (Steam app 1682970, Unreal Engine 4.27)
-from real-world GIS data, without using the in-game editor by hand.
+Custom maps for **Uncrashed: FPV Drone Simulator** (Steam app 1682970, Unreal Engine 4.27), generated from
+real-world map data by a library of verified parts instead of hand placement in the in-game editor.
 
-First map: **NYC** — Midtown Manhattan, the 2 km × 2 km flyable square centred on 5th Avenue and 38th Street
-(roughly 28th to 48th Street, 8th Avenue to 2nd Avenue, so the Empire State Building, Times Square, Herald
-Square, Grand Central and the Chrysler Building are all in), built from NYC Open Data building footprints with
-real roof heights and the city street centreline file with real street widths.
+![Central Park: the Mall seen from the spawn end](docs/img/centralpark_mall.jpg)
 
-## Playing the map
+Three maps live here:
 
-The build script installs one map, **NYC** (in-game name "New York City - Midtown Manhattan", about 92 000
-placed assets plus 2 300 window and billboard decals), straight into the game's local map folder:
+| map | in-game name | base level | state |
+|-----|--------------|------------|-------|
+| `maps/NYC` | New York City - Midtown Manhattan | Empty board | published on the Workshop; first-generation builder |
+| `maps/CentralPark` | New York City - Central Park | BaseLandscape02 (real grass) | being rebuilt on the parts library |
+| `maps/FPVPark`, `maps/FPVParkRookie` | FPV Airspace Park (+ Rookie race) | Mountain | not published yet |
+
+Everything measured about the game (file format, pivots, gate conventions, heightmaps, decals) is written down
+here and in the tool docstrings. Nothing in this repository was guessed from screenshots alone: every rule was
+read from the game files or from player-built Workshop maps, then checked in the game.
+
+## Contents
+
+1. [Playing a map](#playing-a-map)
+2. [The parts library](#the-parts-library)
+3. [Verifying in the game](#verifying-in-the-game)
+4. [The maps](#the-maps)
+5. [Data pipeline](#data-pipeline)
+6. [Map file format](#map-file-format-reverse-engineered)
+7. [Tools](#tools)
+8. [Code style and repository hygiene](#code-style-and-repository-hygiene)
+
+## Playing a map
+
+Each builder installs its map straight into the game's local map folder:
 
 ```
-~/Library/Application Support/Uncrashed/<SteamID64>/MapEditor/User/NYC/
-    NYC.json        the map
-    NYC.info        name, base level, creator, timestamp
+~/Library/Application Support/Uncrashed/<SteamID64>/MapEditor/User/<Name>/
+    <Name>.json     the map
+    <Name>.info     name, base level, creator, timestamp
     Thumbnail.jpg   top-down render
-    Decals/         240 generated PNG window-grid and billboard textures
+    Decals/         generated PNG decals (window grids, billboards), if the map has any
 ```
+
+Open Uncrashed, go to the Track Editor, and load the map from your local maps. The Steam ID comes from the
+`UNCRASHED_STEAM_ID` environment variable.
 
 **Steam Cloud.** The game syncs this folder to Steam Cloud (`steam_autocloud.vdf`). Deleting a map folder on disk
-is not enough: Steam restores it from the cloud on the next launch. To remove a map for good, delete it inside the
-game, or delete its files on Steam's Remote Storage page for the app
-(`https://store.steampowered.com/account/remotestorageapp/?appid=1682970`) and then delete the folder on disk.
+is not enough: Steam restores it on the next launch. Delete the map inside the game, or on Steam's Remote Storage
+page for the app (`https://store.steampowered.com/account/remotestorageapp/?appid=1682970`), then on disk.
 
-Open Uncrashed, go to the Environment & Track Editor, and load it from your local maps. You spawn in the middle
-of the 5th Avenue / 38th Street intersection facing the Empire State Building 380 m away. A copy lives in `maps/NYC/`.
+**Publishing.** Title and description live only on Steam. `maps/<Name>/workshop.json` keeps them beside the map
+and `tools/publish.py` renders the `steamcmd workshop_build_item` script from it (not yet exercised end to end).
 
-## Second map: FPV Airspace Park
+## The parts library
 
-`python3 tools/build_fpvpark.py` builds and installs **FPVPark** ("FPV Airspace Park"), a purpose-built freestyle
-and race map on the Mountain landscape base level. Every object is placed on the real terrain: `tools/landscape.py`
-decodes the level's landscape heightmap textures from the game files (validated: the sampler returns exactly
-−15.00 m at the level's PlayerStart), and the flat valley floor it reveals is an irregular bowl of roughly
-900 × 750 m. Placement is a designed layout, not a scatter: the road loop is reserved first and is the park's spine; the central
-arena holds the chained freestyle features in race order; five themed districts (downtown with the three Neo towers,
-dome and mid-rises; farm with hamlet and village; industrial with train yard, crane yard and dive tower; junkyard
-with the skatepark; lake with a beach) sit around it inside the flat bowl, each with its own modules and a dressing
-pass of themed props, all facing the nearest road piece. Every zone slides at most a set distance to find flat, free
-ground and is skipped and counted otherwise. Every object stands on the terrain height at its own position with the
-catalog's rest-height correction, vertical members carry a 1 m footing, pads carry a 2 m skirt, and every feature
-registers its flight gaps as tubes: props inside a tube are deleted and a structure inside a strict tube aborts the
-build. Build-time checks that must pass: all race legs clear, no structure in a strict tube, zero floating objects
-(`tools/mapcheck.py`), nothing off the landscape. Density comes from the road dressing (fences, pavements, tree lines,
-21 flow gates, crowds), district dressing and forest belts of 22,000 pines ringing the bowl (about 35,000 instances).
+Maps are stitched from **parts**. A part that passed the tests and the showroom renders identically in every
+map because everything, maps included, is built into the same `Scene`.
 
-**Designed freestyle line.** A 72 m dive spire with holed floors whose holes alternate side (a slalom dive), ledges
-on every floor and a split-S platform; a bando with a 30 m gauntlet wing of single-window walls, a 2.5 m column
-corridor and a holed roof; three power-loop goalposts at 10, 13 and 16 m plus an overhang slab; a 44 m bridge on
-pillars for underpasses and loops; a row of vertical gap panels tightening from 1.6 m to 0.9 m and a 2 m slot wall;
-a bent 50 m tunnel; offset container stacks three high with bridged pairs to fly under; a 100 m tree tunnel; an
-orbit tower; a pole line; and the arch row, gap field, skatepark, second bando, dive tower and three 300 m towers
-with 40 m dive ledges. The bowl is then filled with up to 90 modules (container maze, pipes, tire slalom, hesco
-fort, car park, tent camp, hay, rocks, tree ring, tunnel chain, column forest, arches, tank farm, train, picnic,
-neon garden, balloons, scaffold cluster, pallet yard, ramp pair, goalposts).
+![Showroom: the road part](docs/img/showroom_road.jpg)
 
-**Race.** 26 gates, 3 laps, planned as straight flight lines (`maps/FPVPark/race_plan.png`): the home straight
-through the pit arch, a tall inflatable, then a line-up gate and two one-way gates along the gauntlet wing's first
-floor (a 6 m wide, 3.7 m tall corridor beside the hall, open at both ends), a big round gate straight out of it, an
-elevated gate and a low gate in the east field, a drop to the lake and an invisible gate 2 m over the water, under
-the three rising power-loop bars and the overhang slab in one line, across the jump field and past the skatepark,
-round the orbit tower, under the bridge deck between its middle pillars (a round gate at each end to line up), a
-40 m climb along the spire's south face, a one-way gate 3 m over its top and a 77 m dive down beside it, then home.
-Every feature is flown along its open axis with a gate at each end, so no leg asks for a turn inside a corridor.
-`tools/raceline.py` checks every leg (start → gate 1 → … → start) as a straight segment against the oriented
-bounds of every placed mesh and the terrain; the build aborts if any leg is blocked at a 1.5 m tube (only the wing
-is tighter than 2 m). Storage follows what 17 Workshop tracks all do: start and gate yaw = flight bearing − 90°
-(the gate's local +Y is the flight direction, which is also why one-way gates face the right way), gate heights
-from the gate table's pivot and detection-box offsets (`data/gate_bounds.json`), respawn point 0 at the start and
-respawn i at gate i−1 with the gate's yaw, 0.5 m below it. No Workshop track stores a STARTGATE checkpoint; the
-in-game start actor (`BP_StartRace`: a Gate2 mesh plus `GateStart2`, detection box at the pivot) comes from
-`StartTransform`, and in every Workshop track gate 1 lies exactly on the start's local +Y axis. Respawn point 0 is
-placed 12 m behind the start line facing it, so the drone crosses the start gate first (half the hand-made Workshop
-tracks move it to gate 1 instead; the other half leave it at the start). Workshop tracks scale the 2 m gates up to
-5.5x, so gates here are scaled: 6 m Default/OneW gates in the open, 3 m inside the wing, 5 m under the bridge,
-inflatables 1.5x, and no opening lower than 2.5 m (the valley floor undulates up to 1.5 m).
-
-**Rookie race.** `python3 tools/build_fpvpark.py --rookie` installs a second map, **FPVParkRookie** ("FPV Airspace
-Park: Rookie"): the same park with a 20-gate beginner race of big, low inflatables (1.5x InflSimpl, openings 2.5 m)
-down the home straight and round the road loop vertex by vertex, so every leg follows the road through its flow
-gates with no structure to thread (`maps/FPVParkRookie/race_plan.png`).
-
-**FPV Airspace advertising.** Twelve two-sided 24 m billboards spaced along the road loop and facing it, each in a
-clearing, plus one facing the start line; a Hollywood-style "FPV AIRSPACE" in 3 m cubes standing on the slope
-north-east of the bowl; a "FPV-AIRSPACE.APP" cube sign beside the pits; cube lettering on the start arch; and the
-fly-through logo. Billboard artwork is PNG decals (your app icon and README strapline) written to the map's
-`Decals/` folder and copied into the editor's `MapEditor/UserDecals/` and `MapEditor/MapDecals/` libraries, which
-is where its UI blueprint loads user PNGs from (`--no-decals` to skip). Decal basis as described under the NYC
-windows below.
-
-## Regenerating
-
-```bash
-python3 tools/build_nyc.py
-```
-
-Window-grid and billboard decals are part of the map (pass `--no-windows` to leave them out). They use the
-editor's custom-decal loader, the same mechanism Workshop maps use for user PNG decals.
-
-Needs only the system Python (plus Pillow for the thumbnail, which is optional). Input data is already
-in `data/`. To refresh it, the datasets are:
-
-- Buildings: `https://data.cityofnewyork.us/resource/5zhs-2jue.json` (fields `the_geom`, `height_roof` in feet,
-  `construction_year`, `bin`)
-- Parks: `https://data.cityofnewyork.us/resource/enfh-gkve.json` (`multipolygon`, `signname`, `typecategory`)
-- Land (shoreline-clipped 2020 census tracts): `https://data.cityofnewyork.us/resource/63ge-mke6.json`
-- Streets: `https://data.cityofnewyork.us/resource/inkn-q76z.json` (fields `the_geom`, `streetwidth` in feet,
-  `stname_label`, `trafdir`, level codes)
-
-All are queried with `$where=intersects(the_geom,'POLYGON((...))')` and paginated with `$limit`/`$offset`. The
-whole-board datasets (`data/ring_*.json`, `data/land_tracts.json`) use a square of ±4.3 km around the spawn because
-the 6 km board is rotated 44° from north and its corners reach 4.2 km.
-
-## Third map: Central Park
-
-`python3 tools/build_centralpark.py` builds and installs **CentralPark** ("New York City - Central Park") from
-OpenStreetMap on the grassy **BaseLandscape02** level: the only base with real grass (the Empty board is a numbered
-grid and Bp_Grass renders grey on Mac), flat to within 2 m, and its board matches the game's 2.2 km flight box. The
-landscape is not centred on the origin (it spans −1209..+806 m on both axes, measured from its heightmap), so the
-frame (`data/centralpark_frame.json`) puts the origin on Bethesda's lower terrace, 12 m out of the arcade mouth with
-nothing within 5 m of it: the spawn stands on the flagstones looking north at the Angel fountain and the Lake, and the map covers the park from Central Park South to the Great Lawn plus Midtown to about
-56th Street. `tools/osm.py` turns an Overpass dump (not in the repo) into `data/centralpark_features.json`.
-
-Everything is placed asset-first through `tools/mapkit.py`: the 43 arches and bridges are stone arch portals with a
-deck, stone parapets and ramps or real stairs; retaining walls, the transverse-road trenches, fences, playground and
-rink enclosures and step railings are fence, wall and parapet meshes; benches are oriented along their path facing
-it (the mapped benches use OSM positions); city buildings up to 60 m are textured building and house meshes with box
-massing only where no mesh fits; park cottages are house and pavilion meshes; kiosks are the editor's booth meshes.
-Surfaces sit on per-material height bands with staggered pieces so paths never z-fight. Every object stands on the
-terrain at its own position. Detail: water with island holes and rocky banks, streams, the Mall's four elm rows,
-Bethesda Terrace with arcade, stairs and the Angel fountain, Belvedere on Vista Rock, the Obelisk, Bow Bridge, the
-Carousel, Delacorte, the Bandshell, Tavern on the Green, Cherry Hill, ballfields, tennis courts, the Sheep Meadow
-fence, 10,000 trees in the park (5,000 at mapped positions by genus), lamps and benches on every path, vendors at
-every gate and along Central Park South, boats, crowds, traffic and lamps on the framing streets, Columbus Circle
-and Grand Army Plaza, and the Imagine mosaic as a decal. About 44,000 instances; `--lite` drops sidewalks, roof
-clutter and distant small buildings. Build-time check: `tools/mapcheck.py ... --base L_BaseLandscape02` (zero
-floating, zero buried). Reference imagery: `data/centralpark_naip.png` (USGS NAIP). OSM data © OpenStreetMap
-contributors, ODbL.
-
-## Code style
-
-The tools are formatted with [ruff](https://docs.astral.sh/ruff/) (`python3 -m ruff format tools`, settings in
-`pyproject.toml`, 120 columns). Run it before committing.
-
-## Parts library: how every map is built now
-
-Maps are stitched from **parts**, not placed object by object. The rule is that a part which passed the showroom
-and the tests renders identically in every map, because everything goes through the same `Scene`.
+*The `road` part: carriageway, lane dashes, kerbs, a sidewalk each side, tall lamps alternating sides, bins,
+walkers on the sidewalks only, cars in both lanes heading with their lane.*
 
 | file | role |
 |------|------|
-| `tools/scene.py` | the one object a map is built into: base level and ground sampler, instance store, occupancy grid (path / road / sidewalk / water / building / bridge), keep-clear zones, the `add` / `place` / `box` / `plane` / `put` primitives, the writer (`maps/<Name>/` plus the game's `MapEditor/User/<Name>/`) and the checks (floaters, buried, off-landscape, take-off clearance) |
-| `tools/mapkit.py` | asset-first recipes bound to a scene: surfaces on height bands, walls and fences from panels, oriented benches, kiosks, vehicles aligned from the catalogue, stairs, bridges, basins, mesh-first buildings; `place()` positions a mesh by its bounding box because several meshes have corner or end pivots |
-| `tools/prefabs.py` | the parts: `road` (carriageway, lane dashes, kerbs, sidewalks, lamps, bins, walkers, cars in lanes), `path` (with furniture), `road_cut` (walled sunken road with at-grade junctions for drives and straight footbridges for paths), `footbridge`, `pond`, `fountain`, `plaza`, `kiosks`, `playground`, `gazebo`, `cafe`, `terrace`, `statue`; each with a demo in `DEMOS` |
-| `tools/showroom.py` | lays every demo on a grid in a ~700-object map that loads in seconds, and prints a `tools/setcam.py` line per demo to point the editor camera at it |
-| `tools/test_prefabs.py` | builds every demo on a flat scene and checks it by geometry (cars inside the asphalt, walkers and furniture off the carriageway, stair landings meeting decks, water inside basins, nothing floating or outside the footprint) plus a golden hash in `data/prefab_golden.json` so any change in a part's output is noticed |
+| `tools/scene.py` | the one object a map is built into: base level and ground sampler, instance store, occupancy grid (path / road / sidewalk / water / building / bridge), keep-clear zones, the `add` / `place` / `box` / `plane` / `put` primitives, the writer (`maps/<Name>/` plus the game folder) and the checks (floating, buried, off-landscape, take-off clearance) |
+| `tools/mapkit.py` | asset-first recipes bound to a scene: surfaces on per-material height bands, walls and fences from panels, oriented benches, kiosks, vehicles aligned from the catalogue, stairs, bridges, basins, mesh-first buildings. `place()` positions a mesh by its bounding box, because several meshes have corner or end pivots |
+| `tools/prefabs.py` | the parts: `road`, `path`, `road_cut`, `footbridge`, `pond`, `fountain`, `plaza`, `kiosks`, `playground`, `gazebo`, `cafe`, `terrace`, `statue`, each with a demo in `DEMOS` |
+| `tools/showroom.py` | lays every demo on a grid in a ~700-object map that loads in seconds and prints a `tools/setcam.py` line per demo |
+| `tools/test_prefabs.py` | builds every demo on a flat scene and checks it by geometry, plus a golden hash per demo in `data/prefab_golden.json` |
 | `tools/setcam.py` | `setcam <Map> x y z yaw pitch` points a map's editor camera for in-game screenshots |
 
-Workflow for a new or changed part: write it in `prefabs.py` with a demo, run `python3 tools/test_prefabs.py`,
-run `python3 tools/showroom.py`, open the Showroom in the track editor and look at it, then `--update` the golden
-hash. Only then does a map builder call it. Workflow for a new map: a builder that loads its mapped geometry
-(OpenStreetMap, city data, a design) and calls parts along it, then `sc.write()` and `sc.check()`.
+### The rule for changing or adding a part
 
-Measured rules the parts encode (each was a visible bug first): vehicle long axes come from the catalogue bounds
-(the van is long on Y, the cars on X) and a vehicle is refused off the asphalt; a bridge is straight along the
-chord of the path it carries, its deck spans just the cut, its stairs (paths under 6 m) or ramps (wider ways)
-land where the path was cut back, and nothing is placed on its footprint; a road cut keeps its carriageway
-continuous under every bridge and breaks its walls where a drive crosses at grade; fountain water sits inside a
-solid masonry ring below the rim; benches run along their path with the seat facing it; no prop goes inside a
-keep-clear zone (the spawn needs 1 m of open air in every direction).
+1. Write or change the part in `prefabs.py`, with a demo.
+2. `python3 tools/test_prefabs.py` must pass. It checks the written form of every bug that was once seen in the
+   game: cars entirely inside asphalt, walkers / lamps / benches / bins never on a carriageway, no wall panel on
+   a carriageway, stair landings meeting a deck, water inside the basin ring, nothing floating, buried or
+   outside the demo's footprint, traffic in both directions.
+3. `python3 tools/showroom.py`, open **Prefab Showroom** in the track editor, look at the demo from the printed
+   camera line.
+4. `python3 tools/test_prefabs.py --update` accepts the new golden hash. Only now may a map builder call it.
 
-## How the NYC map is built (first generation, before the parts library)
+### What the parts encode
 
-- The **Empty board** base level (`BaseMapRow: BaseBoard`) is a flat 6 km landscape at Z = 0.
-- Freestyle maps (`Track: false`) ignore `Race.StartTransform`; the drone spawns at the base level's PlayerStart,
-  which on the Empty board is the world origin facing yaw −90° (−Y). The map is therefore centred on the
-  5th Avenue / 38th Street intersection and the whole frame is rotated 44° so −Y points at the Empire State Building.
-- Coordinates are Unreal centimetres, Z = up; north is at yaw 44° (stored in `CustomWeather.northyaw`).
-- The board's `MapSettings` actor defines a 2000 × 2000 × 1500 m flyable range box around the origin; buildings
-  and streets outside it are dropped.
-- Every building footprint becomes one rectangle when its minimum-area rectangle covers at least 74 % of the
-  polygon. Otherwise the footprint is rasterised in the rectangle's frame and greedily split into up to
-  twelve rectangles, so L- and U-shaped buildings keep their shape.
-- Named buildings in the footprint data (landmarks such as the New York Public Library, hotels, churches) always keep
-  stone box massing. Other rectangles up to 60 m tall are tiled with the editor's textured building meshes (four office blocks from
-  the ParkingGarage pack, a brick low-rise and an old workshop) whenever a grid of them fits within 30 %
-  non-uniform scaling, stacking up to three high. About a third of the buildings get real windows this way.
-- Everything else is a box. Materials come from age and height: triplanar brick for low pre-war buildings,
-  triplanar concrete for pre-war towers (reads as limestone), grey for post-war mid-rise and dark black for
-  post-war glass towers. Pre-war towers between 45 and 250 m get 1916-zoning "wedding cake" setbacks.
-- Roofs get New York clutter: wooden-style water towers (the farm silo asset scaled down), elevator
-  bulkheads and a parapet wall on masonry buildings.
-- The Empire State Building (381 m roof, antenna to 443 m), Chrysler Building (spire to 319 m) and
-  One Vanderbilt (427 m) get hand-tuned stepped massing.
-- Streets are thin black boxes along each centreline segment at the recorded width, with raised concrete
-  sidewalks on both sides trimmed at the intersections. Avenues sit 1 cm above cross streets to avoid
-  z-fighting. Two-way streets get a yellow centre line. Elevated segments (Park Avenue viaduct) are skipped.
-- Sidewalk widths are measured per street side so the pavement reaches the building line. Lane lines and
-  ladder crosswalks are thin white boxes.
-- Street furniture: elms and maples along the kerbs, tall floodlight poles on avenues and short lamps on
-  side streets (night-light blueprints), yellow Camaros as taxis plus white cars and vans in the lanes,
-  pedestrians (the editor's pilot figures) on every sidewalk, trash cans, food carts, benches, planters and
-  fuse boxes, seventy scaffolding sidewalk sheds with cones and pallets around them.
-- Void filling: a 2 m coverage grid finds every patch inside the built-up area that is neither building nor
-  street. Small ones become rear yards (dumpsters, pallets, barrels, bushes), large ones become parking lots
-  (asphalt, parked cars in rows, a lamp) or plazas (trees, benches, planters, people).
-- Parks come from the NYC Parks Properties dataset (`enfh-gkve`, saved in `data/midtown_parks.json`) and are
-  laid out before the void filler runs so nothing else lands on them. Neighbourhood parks get lawns, trees,
-  benches and people; playgrounds get a concrete base, play equipment and a chain-link fence; triangles and
-  plazas get planters, cafe furniture, trees, people and a statue; the Park Avenue malls become planted
-  medians. Bryant Park is laid out by hand on top of its polygon: gravel base, the Great Lawn with people and
-  chairs on it, two rows of plane trees along each long side with tables and chairs beneath, the fountain at
-  the west end, kiosks and lamps.
-- Building rectangles are snapped to the Manhattan street grid whenever the grid-aligned bounding box is
-  within 18 % of the minimum-area one, so near-square footprints no longer come out at odd angles.
-- Signage is placed only on true ground-level box facades (never on the textured meshes or set-back tiers,
-  whose real walls differ from the bounding box), at most three varied screens per facade.
-- FPV features: four construction sites with open concrete skeletons (floors on columns, no walls), tower
-  cranes, scaffolding, fencing and plant; three open multi-storey parking decks with ramps and parked cars;
-  a dozen glazed skybridges between facing towers; and the elevated Park Avenue viaduct around Grand Central,
-  built from the centreline file's elevated level codes (17, 21, 22) with ramps, parapets and piers.
-- The whole 6 km board is used. The central 2 km square has full detail. The mid ring (1 to 2 km) has every
-  building over 5 m as a box, roads with sidewalks and street trees, and parks with grass and trees. The outer
-  ring (2 to 3 km) has buildings over 14 m, roads and parks. Union Square, Madison Square Park, Washington
-  Square and the south end of Central Park fall in these rings.
-- Ground surfaces are the editor's textured 4 m ground planes (`SM_BaseGround_0-1` rows with triplanar
-  materials): asphalt for roads and parking, pavement for sidewalks and plazas, gravel for park paths, dirt for
-  construction sites. These are the rows Workshop maps use for the same purpose.
-- Lawns are a plain green surface. The editor's grass blueprint (`Bp_Grass_C`) uses a wind-animated grass
-  material with no macOS override (the asset table ships "no wind" Mac materials for every tree and bush but
-  not for the grass), and it renders untextured grey on a Mac, so it is not used.
-- Rivers use the water blueprint (`BP_meWater_C`, a 4 m × 4 m × 2.1 m volume whose pivot is the water surface),
-  placed as 100 m tiles wherever neither the shoreline-clipped census tracts nor a park polygon shows land
-  (the 2020 tracts leave Central Park uncovered). The size and pivot come from
-  the blueprint's own component and mesh bounds, read from the game files.
-- Park polygons that cross the board edge (Central Park) are clipped to the board before layout.
-- Parks get gravel perimeter and cross paths, lamps, benches along the paths, dense trees and bushes, planters
-  and people. The south end of Central Park alone has several hundred trees.
-- Times Square: Broadway from 42nd to 47th is a pedestrian plaza with cafe tables, chairs and planters, the
-  facades facing the bowtie carry grids of LED screens plus a few giant ones and neon tubes, and the red
-  TKTS steps with people sitting on them stand at Duffy Square. Herald Square (Broadway 33rd to 35th) gets
-  the same plaza treatment plus statues and screens.
-- Window decals: for every plain box facade at least 30 m tall that is not a party wall against a neighbour,
-  a decal is projected onto the face with a generated window-grid PNG (punched windows on masonry, curtain
-  wall on glass towers), and Times Square facades get generated billboard decals. Decal basis, which matches
-  editor-placed wall decals in Workshop maps exactly and Unreal's deferred-decal shader (texture U along local
-  Z, V along local Y, projection along +X): X points into the surface, Y straight down, Z = X × Y along the
-  wall; scale X = depth, Y = height / 4, Z = width / 4 (the editor's decal size is 4 m). PNGs are copied into
-  the editor's `MapEditor/UserDecals/` and `MapEditor/MapDecals/` libraries, which is where it loads them from.
+![Showroom: a road cut with a footbridge, a ramped promenade bridge and a drive junction](docs/img/showroom_road_cut.jpg)
 
-`tools/preview.py <map.json> <out.png> [cx cy radius]` renders an oblique preview of any map without the game.
-`tools/raceline.py <map.json> [--clearance m]` reports every race leg that a mesh or the terrain blocks,
-`tools/racemap.py <map.json> <out.png> [half-size m]` draws the race plan (footprints, numbered gates with
-opening heights, straight legs, start arrow) top-down, `tools/mapcheck.py <map.json> [--base L_...|--flat 0]` lists floating, buried and
-off-landscape objects (supports are indexed by their whole footprint), `tools/mapkit.py` is the shared asset-first
-placement kit (bridges from arch and parapet meshes, stairs, walls and fences from panels, oriented benches,
-kiosks, mesh-first building massing, z-layered surfaces), and `tools/bounds_fix.py` completes `data/catalog.json` with bounds for basic shapes and
-blueprint rows (union of their component meshes). `data/gate_bounds.json` holds each gate row's pivot and
-detection-box offset. The heightmap sampler was validated against six player-built Workshop maps on the Mountain
-landscape (ground objects within 0.1 m). The measured conventions (gate yaw, pivots, decal basis, placement rules) are summarised in this README and in the tool docstrings.
+*The `road_cut` part: a sunken road stand-in (the terrain cannot be dug) with a footpath bridge on stairs, a wide
+promenade bridge on ramps, and a drive crossing at grade.*
+
+- **Vehicles.** The long axis comes from the catalogue bounds (the van is long on Y, the cars on X). A vehicle is
+  refused anywhere the occupancy grid is not carriageway. Lanes alternate so traffic runs both ways.
+- **Bridges are straight.** A bridge's axis is the chord of the path it carries, measured between the two points
+  where the path is cut back; the deck spans just the cut; stairs (paths under 6 m) or ramps (wider ways) land
+  exactly where the path was cut, with short straight links where the path bends; nothing else stands on the
+  bridge footprint. Bridges closer than 14 m merge, widest wins.
+- **Road cuts.** The carriageway is never cut and runs under every bridge. Where a drive crosses at grade the
+  walls break: the gap circle's radius is the hypotenuse of the half-gap and the wall offset, because a circle of
+  the half-gap alone never reached walls 6.8 m off the centreline. Lamps stand on the bank outside the walls.
+
+![Showroom: the drive junction from the drive](docs/img/showroom_junction.jpg)
+
+- **Fountains.** A solid masonry ring (concrete segments, not a thin brick wall, which read as a rail from the
+  air) with 2 m water tiles that stop 1.6 m short of the ring, 0.25 m below the rim; benches round it facing
+  the water; the basin is a keep-clear zone.
+- **Ponds.** Water tiles subdivided to 2 m at the shore, 0.30 m above the highest ground inside (on
+  BaseLandscape02 the decoded heightmap sits 0.30 m under the rendered surface, measured from Workshop maps);
+  bank rocks and willows just outside the shore.
+- **Benches** run along their path with the seat facing it: yaw = path yaw − side·π/2 (long axis is the mesh's
+  local Y, the seat local +X).
+- **Surfaces** sit on height bands (lawn 0, dirt .05, gravel .07, asphalt .10, pavement .14, flagstone .16, wood
+  .18, plaza .20, sidewalk .22 m) and consecutive pieces of one path alternate by 4 mm so overlaps never z-fight.
+- **Mesh pivots are not always centred.** `SM_Stair_A` has its pivot at one side of the foot (bbox X 0..3.58 m,
+  Y −3.6..+5.0 m, Z −0.37..+5.3 m) and climbs toward its local +Y; `SM_Deck_Floor_04` has it at a corner. Placing
+  such pivots at a bridge centre put the meshes metres off, so `place()` uses the catalogue bounds.
+- **Take-off clearance.** Nothing but the ground within 1 m of the spawn capsule (0.2 to 2.2 m up); the build
+  aborts otherwise.
+
+## Verifying in the game
+
+Uncrashed is a cooked game: its maps cannot be opened in the Unreal editor, so verification happens in the game's
+own track editor, driven from the command line and a screenshot:
+
+1. Build the map (`--editor` on the Central Park builder drops the trees and the city so the editor loads in
+   about a minute instead of ten).
+2. `python3 tools/setcam.py <Map> x y z yaw pitch` writes the editor camera into the map (yaw −90 looks along −Y,
+   negative pitch looks down).
+3. Relaunch the game through Steam (`open steam://rungameid/1682970`), open the Track Editor, click the map tile
+   (the list is sorted by build time, newest first), screenshot.
+
+![Central Park: the 65th Street transverse crossing built by the road-cut rules](docs/img/centralpark_crossing.jpg)
+
+*Central Park, the 65th Street transverse under Center Drive: carriageway continuous under the deck, piers at the
+walls, ramps on the axis, cars along their lanes, no walkers in the trench.*
+
+## The maps
+
+### Central Park
+
+`python3 tools/build_centralpark.py [--editor|--no-trees|--no-city|--lite|--no-windows]` builds **CentralPark**
+from OpenStreetMap on **BaseLandscape02**: the only base with real grass (the Empty board is a numbered grid and
+the grass blueprint renders grey on a Mac), flat to within 2 m, matching the 2.2 km flight box. The landscape is
+not centred on the origin (−1209..+806 m on both axes, measured from its heightmap), so the frame
+(`data/centralpark_frame.json`) puts the origin on Bethesda's lower terrace with nothing within 5 m: the spawn
+looks north at the Angel fountain and the Lake. The map covers the park from Central Park South to the Great Lawn
+plus Midtown to about 56th Street.
+
+What is in it: water with island holes and rocky banks, streams, the Mall's elm rows, Bethesda Terrace with
+arcade, stairs and fountain, Belvedere on Vista Rock, the Obelisk, Bow Bridge, the Carousel, Delacorte, the
+Bandshell, Tavern on the Green, Cherry Hill, ballfields, tennis courts, the Sheep Meadow fence, about 10,000 trees
+(half at mapped positions by genus), lamps and benches on every path, vendors at every gate, boats, crowds,
+traffic and lamps on the framing streets, Columbus Circle, Grand Army Plaza and the Imagine mosaic as a decal.
+The transverse roads are walled cuts with at-grade junctions for drives and straight footbridges for paths, as
+in the showroom above. The builder is being moved onto the parts library feature by feature; the full build is
+about 44,000 instances, the editor build about 26,000.
+
+OSM data © OpenStreetMap contributors, ODbL. Reference imagery `data/centralpark_naip.png` is USGS NAIP.
+
+### NYC (Midtown Manhattan)
+
+`python3 tools/build_nyc.py` builds the first map: the 2 km flyable square centred on 5th Avenue and 38th Street
+(28th to 48th Street, 8th to 2nd Avenue) from NYC Open Data building footprints with real roof heights and the
+street centreline file with real widths. About 92,000 placed assets plus 2,300 window and billboard decals.
+
+How it is built (first-generation code, predating the parts library):
+
+- Freestyle maps ignore `Race.StartTransform`; the drone spawns at the base level's PlayerStart, on the Empty
+  board the origin facing −Y. The frame is rotated 44° so −Y points at the Empire State Building 380 m away.
+- Building footprints become one rectangle when the minimum-area rectangle covers 74 % of the polygon, otherwise
+  up to twelve rectangles from a raster split, snapped to the Manhattan grid when within 18 % of the minimum
+  rectangle. Rectangles up to 60 m are tiled with the editor's textured building meshes when a grid fits within
+  30 % scaling; the rest are boxes with materials by age and height (brick, concrete-as-limestone, grey, glass),
+  1916-zoning setbacks on pre-war towers, water towers, bulkheads and parapets on roofs; the Empire State,
+  Chrysler and One Vanderbilt are hand-massed.
+- Streets at their recorded widths with raised sidewalks measured per side, lane lines, crosswalks, elms and
+  maples, floodlights and lamps, taxis and vans, pedestrians, carts, benches, planters, scaffolding sheds.
+- Void filling turns leftover patches into rear yards, parking lots or plazas; parks come from the NYC Parks
+  dataset with Bryant Park laid out by hand; Times Square and Herald Square are pedestrian plazas with LED
+  screens, neon and the TKTS steps.
+- FPV features: construction sites with open concrete skeletons and cranes, open parking decks, skybridges, and
+  the Park Avenue viaduct around Grand Central from the centreline file's elevated level codes.
+- Window decals on every plain facade over 30 m and billboard decals around Times Square, projected with the
+  decal basis that matches editor-placed decals exactly: X into the surface, Y straight down, Z = X × Y along
+  the wall; scale X = depth, Y = height / 4, Z = width / 4. PNGs go to `MapEditor/UserDecals/` and
+  `MapEditor/MapDecals/`, where the editor loads user decals from.
+- The whole 6 km board is used, with full detail in the central 2 km and thinner rings outside.
+
+### FPV Airspace Park (not published yet)
+
+`python3 tools/build_fpvpark.py [--rookie]` builds a designed freestyle and race park on the Mountain landscape:
+a road loop reserved first as the spine, a central arena of chained freestyle features (dive spire, bando with a
+gauntlet wing, power-loop goalposts, bridge, gap panels, tunnel, container stacks, tree tunnel, orbit tower,
+towers with dive ledges) and five themed districts, dressed with props, forest belts and FPV Airspace billboards.
+Every feature registers its flight gap as a tube; props inside a tube are deleted and a structure in a strict
+tube aborts the build.
+
+**Race storage, measured on 17 Workshop tracks:** start and gate yaw = flight bearing − 90° (local +Y is the
+flight direction); gate 1 lies on the start's local +Y; no STARTGATE checkpoint row, the in-game start actor
+(`BP_StartRace`: a Gate2 mesh plus `GateStart2`) comes from `StartTransform`; respawn 0 is placed 12 m behind
+the start facing it; checkpoint `Scale3D` is honoured, and Workshop tracks scale the 2 m gates up to 5.5×; gate
+opening = pivot + detection-box offset × scale (`data/gate_bounds.json`). `tools/raceline.py` checks every leg
+(start → gate 1 → … → start) as a straight segment against every mesh's oriented bounds and the terrain; the
+build aborts if a leg is blocked at a 1.5 m tube. The rookie variant is a 20-gate race of big low inflatables
+round the road loop. Race plans: `maps/FPVPark/race_plan.png`, `maps/FPVParkRookie/race_plan.png`.
+
+## Data pipeline
+
+- **Game data.** `tools/pakread.py` lists the game's `.pak` files (version 11, unencrypted, Zlib),
+  `tools/pakextract.py` extracts by substring, `tools/uasset.py` reads cooked UE4.27 assets (names, imports,
+  exports, properties, DataTable rows), `tools/build_catalog.py` dumps `DT_MapEditorAssets` with each mesh's
+  bounds into `data/catalog.json` (804 rows), `tools/bounds_fix.py` completes it for basic shapes and blueprint
+  rows, `tools/build_index.py` and `tools/assets.py` build the searchable asset index (`docs/ASSETS.md`).
+  Extracted game files stay out of git.
+- **Landscapes.** `tools/landscape.py` decodes a base level's landscape heightmap textures. Validated: the
+  sampler returns exactly −15.00 m at the Mountain level's PlayerStart and matches ground objects of six Workshop
+  maps within 0.1 m; BaseLandscape02 renders 0.30 m above its decoded heightmap (`SURFACE_OFFSET_CM`).
+- **Real places.** `tools/osm.py` turns an Overpass dump into classified lines and polygons in a local metre
+  frame (`Frame(lat0, lon0, axis_deg, flip_north)`); the Overpass `out body; >; out skel qt;` form lists ways
+  twice and the loader keeps the tagged copy. NYC uses the city's open data (buildings `5zhs-2jue`, parks
+  `enfh-gkve`, land `63ge-mke6`, streets `inkn-q76z`), queried with `intersects(the_geom, POLYGON(...))`.
+- **Checks.** `tools/mapcheck.py` (floating, buried, off-landscape, take-off clearance), `tools/raceline.py`
+  (race legs), `tools/racemap.py` (race plan drawing), `tools/preview.py` and `tools/topdown.py` (renders without
+  the game).
 
 ## Map file format (reverse engineered)
 
@@ -273,13 +232,12 @@ A map is a folder containing `<Name>.json`, `<Name>.info` and `Thumbnail.jpg`. W
 | `BaseMapRow` | row name in `DT_LevelName` (`BaseBoard`, `BaseLandscape`, `BaseLandscape02..04`, `MountainOpen`, `DriftTrack`, ...) |
 | `WeatherIndex` | integer weather preset |
 | `Race` | `CheckPoints[]`, `StartTransform`, `Laps`, `BestTime`, `Spoints[]` |
-| `CamLoc` | menu camera transform |
+| `CamLoc` | editor camera transform |
 | `CustomWeather` | `timeOfDay`, `northyaw`, `Cloud` (optional) |
 
-Transforms are `{Rotation: quaternion XYZW, Translation: cm, Scale3D}`; the translation is the actor
-pivot, so the cube is placed by its centre, the brick wall by its base and the concrete floor by its top.
-
-`Rname` values are rows of the game's `DT_MapEditorAssets` DataTable. The rows used here:
+Transforms are `{Rotation: quaternion XYZW, Translation: cm, Scale3D}`; the translation is the actor pivot, so a
+cube is placed by its centre, the brick wall by its base and the concrete floor by its top. `Rname` values are
+rows of the game's `DT_MapEditorAssets` DataTable:
 
 | row | mesh | base size | pivot |
 |-----|------|-----------|-------|
@@ -287,19 +245,29 @@ pivot, so the cube is placed by its centre, the brick wall by its base and the c
 | `NewRow_14` / `_64` / `_81` / `_89` / `_272` / `_261` grey / `_380` / `_113` black | `SM_Cylinder` | 1 m diameter, 1 m tall | centre |
 | `NewRow_303` | `SM_ConcreteFloor01`, triplanar concrete | 4 × 4 × 0.30 m | top (z from −0.29 to +0.01) |
 | `NewRow_318` | `SM_ConcreteWall01`, triplanar brick | 0.3 × 4 × 4 m | bottom centre |
+| `NewRow_182` / `_185` / `_197` / `_186` / `_376` / `_180` / `_181` / `_662` / `_184` | `SM_BaseGround` asphalt / pavement ×3 / flagstone / dirt / gravel / sand / wood | 4 × 4 × 0.1 m | centre |
+| `NewRow_183` | `BP_meWater_C` | 4 × 4 × 2.1 m | water surface |
 
-`data/catalog.json` lists all 804 rows with mesh path, category and bounding box (metres = values / 100).
+The `.info` file holds only `Name`, `BaseMapRow`, `CreatorSteamID`, `CreationTimeUnix` and `Track`.
 
 ## Tools
 
 | script | purpose |
 |--------|---------|
-| `tools/pakread.py` | minimal reader for the game's `.pak` files (version 11, unencrypted, Zlib); lists every file |
-| `tools/pakextract.py` | extracts files matching a substring from the paks |
-| `tools/uasset.py` | reads cooked UE4.27 `.uasset`/`.uexp`: names, imports, exports, tagged properties, DataTable rows |
-| `tools/build_catalog.py` | dumps `DT_MapEditorAssets` and reads each mesh's bounds into `data/catalog.json` |
-| `tools/build_nyc.py` | builds and installs the NYC map |
-| `tools/scene.py`, `tools/mapkit.py`, `tools/prefabs.py`, `tools/showroom.py`, `tools/test_prefabs.py`, `tools/setcam.py` | the parts library, see above |
+| `tools/scene.py`, `tools/mapkit.py`, `tools/prefabs.py` | the parts library (scene, recipes, parts) |
+| `tools/showroom.py`, `tools/test_prefabs.py`, `tools/setcam.py` | showroom map, geometry tests, editor camera |
+| `tools/build_centralpark.py`, `tools/build_nyc.py`, `tools/build_fpvpark.py` | the map builders |
+| `tools/osm.py`, `tools/landscape.py`, `tools/geom.py` | OpenStreetMap extraction, heightmaps, geometry helpers |
+| `tools/mapcheck.py`, `tools/raceline.py`, `tools/racemap.py`, `tools/preview.py`, `tools/topdown.py` | checks and renders |
+| `tools/pakread.py`, `tools/pakextract.py`, `tools/uasset.py`, `tools/build_catalog.py`, `tools/bounds_fix.py`, `tools/build_index.py`, `tools/assets.py`, `tools/thumbs.py` | game-data extraction and the asset catalogue |
+| `tools/publish.py` | Workshop publishing script from `maps/<Name>/workshop.json` |
 
-Extracted game assets are ignored by git; everything in `data/` that is committed is either public data
-or metadata derived from the game.
+## Code style and repository hygiene
+
+The tools are formatted with [ruff](https://docs.astral.sh/ruff/) (`python3 -m ruff format tools`, settings in
+`pyproject.toml`, 120 columns) and every tool is documented in its docstrings. Run `python3 tools/test_prefabs.py`
+before committing a change to the parts library.
+
+This repository is public. Extracted game assets, pak listings, raw map dumps and thumbnails are ignored by git;
+everything committed under `data/` is public data or metadata derived from the game. The Steam ID is read from
+`UNCRASHED_STEAM_ID`.

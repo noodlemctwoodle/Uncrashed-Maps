@@ -284,14 +284,18 @@ def plan_crossings(cut_pts, cut_w, ways, wall_h=WALL_H):
 def road_cut(sc, pts, width=12.0, wall_h=WALL_H, ways=(), cars=45.0):
     """A sunken-road stand-in (the terrain cannot be dug): a bare carriageway between retaining walls, with cars
     and lamps, the walls broken where drives cross at grade, and a straight footbridge wherever a path crosses.
-    Returns the blockers (x, y, r) the crossing paths must be cut back from (pass them to path())."""
+    Returns dict(paths=[(x, y, r)], drives=[(x, y, r)]): the circles the crossing paths and drives must be cut
+    back from (pass them as `blockers` to path() and road())."""
     junctions, bridges = plan_crossings(pts, width, ways, wall_h)
     for b in bridges:  # bridges first: the carriageway furniture then avoids their footprint
         footbridge(sc, b["x"], b["y"], b["yaw"], b["w"] + 0.6, wall_h + 1.0)
         for link in b["links"]:
             sc.ribbon(link, b["w"], "pavement")
     road(sc, pts, width, sidewalk=0, lamps=40.0, cars=cars, people=0, kerb=False)
-    gaps = [(jx, jy, jw / 2 + 1.5) for (jx, jy, jw) in junctions]
+    # the walls run width/2 + 0.8 off the centreline, so a gap circle around the junction point must reach them:
+    # its radius is the hypotenuse of the half-gap and the wall offset (a circle of the half-gap alone never
+    # touched the walls and they ran straight across the drive, as seen in the game)
+    gaps = [(jx, jy, math.hypot(jw / 2 + 1.5, width / 2 + 0.8)) for (jx, jy, jw) in junctions]
     for sgn in (-1, 1):
         line = offset(pts, sgn * (width / 2 + 0.8))
         for part in clip(line, gaps) if gaps else [line]:
@@ -299,7 +303,12 @@ def road_cut(sc, pts, width=12.0, wall_h=WALL_H, ways=(), cars=45.0):
     sc.st("road_cuts")
     sc.st("cut_junctions", len(junctions))
     sc.st("cut_footbridges", len(bridges))
-    return [(b["x"], b["y"], b["R"]) for b in bridges]
+    return dict(
+        paths=[(b["x"], b["y"], b["R"]) for b in bridges],  # cut crossing paths back to the bridge approaches
+        drives=[
+            (jx, jy, width / 2 - 0.3) for (jx, jy, jw) in junctions
+        ],  # cut crossing drives inside the cut's asphalt
+    )
 
 
 # ---- water --------------------------------------------------------------------------------------------------------
@@ -482,10 +491,10 @@ def demo_road_cut(sc, x, y, yaw):
     foot = [l2w(x, y, yaw, -24, -40), l2w(x, y, yaw, -20, 40)]
     prom = [l2w(x, y, yaw, 2, -40), l2w(x, y, yaw, 2, 40)]
     drive = [l2w(x, y, yaw, 26, -40), l2w(x, y, yaw, 26, 40)]
-    blockers = road_cut(sc, cut, 12.0, ways=[(foot, 3.6, False), (prom, 8.0, False), (drive, 10.0, True)])
-    path(sc, foot, 3.6, "pavement", blockers=blockers, people=0)
-    path(sc, prom, 8.0, "flagstone", blockers=blockers, people=0)
-    road(sc, drive, 10.0, sidewalk=2.0, cars=0, people=0, blockers=[(*l2w(x, y, yaw, 26, 0), 7.0)])
+    cut_backs = road_cut(sc, cut, 12.0, ways=[(foot, 3.6, False), (prom, 8.0, False), (drive, 10.0, True)])
+    path(sc, foot, 3.6, "pavement", blockers=cut_backs["paths"], people=0)
+    path(sc, prom, 8.0, "flagstone", blockers=cut_backs["paths"], people=0)
+    road(sc, drive, 10.0, sidewalk=2.0, cars=30.0, people=0, blockers=cut_backs["drives"])
 
 
 @demo("footbridge_bend", 50)
@@ -493,8 +502,8 @@ def demo_footbridge_bend(sc, x, y, yaw):
     """A path that bends across the cut: the bridge is straight along the chord and short links join the path."""
     cut = _line(x, y, yaw, 50)
     bend = [l2w(x, y, yaw, -14, -40), l2w(x, y, yaw, -4, -14), l2w(x, y, yaw, 4, 14), l2w(x, y, yaw, 16, 40)]
-    blockers = road_cut(sc, cut, 12.0, ways=[(bend, 3.6, False)], cars=0)
-    path(sc, bend, 3.6, "pavement", blockers=blockers, people=0)
+    cut_backs = road_cut(sc, cut, 12.0, ways=[(bend, 3.6, False)], cars=0)
+    path(sc, bend, 3.6, "pavement", blockers=cut_backs["paths"], people=0)
 
 
 @demo("path", 35)
