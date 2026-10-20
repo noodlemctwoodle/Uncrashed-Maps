@@ -82,13 +82,30 @@ before using it. Never assume a mesh pivot, a rotation convention or a limit.
 6. Density/flow: the road loop is the spine (fences, pavements, tree lines, flow gates every 60 m, crowds at
    corners, billboards facing the road), districts are dressed with themed props, forest belts ring the bowl.
 
+## Data pipeline for real places
+- OpenStreetMap via Overpass (`https://overpass-api.de/api/interpreter`, send a User-Agent or you get 406; retry on
+  502 with backoff) gives everything in one pull: buildings with `height` (NYC import), water with islands, lawns,
+  woods, rock, paths with `bridge`/`tunnel`/`width` (widths can be feet-and-inches), trees with `genus`, lamps,
+  benches, statues. `tools/osm.py <dump> <out> <lat0> <lon0> <axis_deg>` converts to local metres (+X west, +Y
+  south when flip_north) with multipolygon assembly; set the frame so the spawn (origin, facing -Y on BaseBoard)
+  looks along the map's main axis. NYC Open Data (Socrata) is the fallback for building heights.
+- Aerial reference: USGS NAIP `imagery.nationalmap.gov/.../USGSNAIPImagery/ImageServer/exportImage` (public
+  domain; request a size with the bbox's Mercator aspect or the image is stretched). NYC's own tile service moved
+  behind api-portal.nyc.gov.
+- Asset library: `tools/build_index.py` -> `data/asset_index.json` + `docs/ASSETS.md` (all 804 rows: size, pivot,
+  base offset, collision, physics, Mac material, tags); query with `tools/assets.py` (`find('tree', max_h=12)`,
+  `rest(row)`). Editor categories: Small_assets, Wall, Foliage, Interractive, Small structure, Big structure,
+  Basic shape, Big_assets, Custom, Decals, Tools, Institutional, Gates.
+- Public repo: https://github.com/noodlemctwoodle/Uncrashed-Maps. Never commit `data/extracted`, thumbnails, pak
+  listings or raw dumps (see .gitignore); keep personal paths out of code (Steam ID via UNCRASHED_STEAM_ID).
+
 ## Workflow
 1. `python3 tools/build_fpvpark.py` (add `--rookie` for the beginner-race map FPVParkRookie) builds, validates (race legs, strict tubes, floaters, off-landscape) and
    installs FPVPark; it prints `zones:` (actual positions) and `stats:` (what was skipped). Fix skips by
    moving/shrinking zones, not by relaxing checks.
 2. Visual checks without the game: `tools/racemap.py` (top-down race plan), `tools/preview.py` (oblique),
    `tools/mapcheck.py` (floaters/buried), `tools/raceline.py <json> --clearance 2.0` (margin).
-3. NYC: `tools/build_nyc.py` (GIS city, see README).
+3. NYC: `tools/build_nyc.py` (GIS city), Central Park: `tools/build_centralpark.py` (OSM; `--lite`), see README.
 
 ## How to verify a new fact
 - Mesh/pivot: `tools/uasset.py` `Asset(path).read_props(...)['ExtendedBounds']` after `tools/bounds_fix.py`-style
