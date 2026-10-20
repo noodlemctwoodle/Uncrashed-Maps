@@ -131,6 +131,11 @@ fence. The surrounding city uses OSM footprints and heights (supertalls by name)
 look at the park. About 61,000 instances; `--lite` drops sidewalks, roof clutter and distant small buildings.
 Reference imagery: `data/centralpark_naip.png` (USGS NAIP, public domain). OSM data © OpenStreetMap contributors, ODbL.
 
+## Code style
+
+The tools are formatted with [ruff](https://docs.astral.sh/ruff/) (`python3 -m ruff format tools`, settings in
+`pyproject.toml`, 120 columns). Run it before committing.
+
 ## How the map is built
 
 - The **Empty board** base level (`BaseMapRow: BaseBoard`) is a flat 6 km landscape at Z = 0.
