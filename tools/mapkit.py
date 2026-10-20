@@ -186,34 +186,33 @@ class MapKit:
     # ---- walls, fences, stairs ---------------------------------------------------------------------------------
     def wall(self, pts, kind="brick", height=None):
         """A wall or fence along a polyline from real sections. kinds: 'retaining' (concrete fence panels),
-        'brick' (SM_ConcreteWall01 panels), 'parapet' (stone parapet), 'fence' (park fence), 'tall_fence'."""
+        'brick' (SM_ConcreteWall01 panels), 'parapet' (stone parapet sections stretched to 3.76 m), 'fence'
+        (park fence), 'tall_fence'. `height` scales the section height (m)."""
         spec = {
-            "retaining": (CONCRETE_FENCE, 4.88, "x"),
-            "parapet": (PARAPET, 0.94, "x"),
-            "fence": (PARK_FENCE, 4.0, "x"),
-            "tall_fence": (TALL_FENCE, 4.0, "y"),
-            "brick": (BRICK, 4.0, "y"),
+            "retaining": (CONCRETE_FENCE, 4.88, 4.88, "x"),
+            "parapet": (PARAPET, 3.76, 0.94, "x"),  # (row, length covered per section, mesh length, long axis)
+            "fence": (PARK_FENCE, 4.0, 4.0, "x"),
+            "tall_fence": (TALL_FENCE, 4.0, 4.0, "y"),
+            "brick": (BRICK, 4.0, 4.0, "y"),
         }
-        row, seg, axis = spec.get(kind, spec["brick"])
+        row, seg, mesh_len, axis = spec.get(kind, spec["brick"])
+        h = (height / size(row)[2]) if height else 1.0
         for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
             L = math.hypot(x1 - x0, y1 - y0)
             if L < 0.3:
                 continue
             n = max(1, int(round(L / seg)))
             yaw = math.atan2(y1 - y0, x1 - x0)
-            sfit = L / (n * seg)
+            sfit = L / (n * mesh_len)
             for q in range(n):
                 t = (q + 0.5) / n
                 x, y = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
-                h = (height / size(row)[2]) if height else 1.0
                 gz_ = self.g(x, y) + rest(row) - 0.15  # 15 cm sunk so slopes never show a gap
-            if row == PARAPET:
-                sfit = sfit * 4.0  # one 0.94 m parapet section stretched to 3.76 m
                 if axis == "x":
                     self.add(row, x, y, gz_, sfit, 1.0, h, yaw)
                 else:
                     self.add(row, x, y, gz_, 1.0, sfit, h, yaw - math.pi / 2)
-            self.st("wall_sections")
+                self.st("wall_sections")
 
     def stairs(self, x, y, yaw, rise, width=None):
         """A real flight of stairs (SM_Stair_A, 8.6 m run, 5.7 m rise) scaled to `rise`, climbing along `yaw`
