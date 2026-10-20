@@ -26,17 +26,17 @@ def enum_names(path):
     return {f'E_AssetsCategory::NewEnumerator{i}': n for i, n in enumerate(names)}
 CATN = enum_names(os.path.join(DATA, 'extracted/Uncrashed/Content/MapEditor/DataTables/Logics/E_AssetsCategory.uasset'))
 TAG_RULES = [  # (tag, regex on the lower-cased mesh/blueprint name)
-    ('tree', r'elm|maple|oak|pine|alder|tree|birch|spruce|fir|palm|willow|poplar'), ('bush', r'bush|shrub|hedge|grass|fern|plant|flower'), ('rock', r'rock|cliff|boulder|stone(?!wall)'),
+    ('tree', r'elm|maple|oak|pine|alder|tree(?! ?pot)|birch|spruce|fir|palm|willow|poplar|cork'), ('bush', r'bush|shrub|hedge|grass|fern|plant|flower'), ('rock', r'rock|cliff|boulder|stone(?!wall)'),
     ('vehicle', r'camaro|kangoo|van|car(?!ousel|go|d|t)|truck|bus|tractor|forklift|boxcar|train|wagon|bike|moto|boat|plane|helic'), ('person', r'pilot|people|woman|man_|human|spectat'),
     ('building', r'bldg|building|tower|skyscr|workshop|house|barn|silo|warehouse|hangar|church|castle|dome'), ('house', r'house|cottage|cabin'), ('industrial', r'tank|pipe|generator|scaffold|crane|container|pallet|barrel|crate|hesco|rig|turbine|windmill|fusebox|machine'),
-    ('container', r'container'), ('furniture', r'bench|table|chair|planter|trash|dumpster|tent|umbrella|cart|stall|sign|stand'), ('lamp', r'lamp|light|projector|lantern'), ('sign', r'sign|billboard|screen|led|panel|neon'),
+    ('container', r'container'), ('furniture', r'bench|table|chair|planter|tree ?pot|trash|dumpster|tent|umbrella|cart|stall|sign|stand'), ('lamp', r'lamp|light|projector|lantern'), ('sign', r'sign|billboard|screen|led|panel|neon'),
     ('fence', r'fence|handrail|rail|barrier|gate|wall'), ('barrier', r'barrier|cone|hesco|tire|tyre|bollard'), ('sport', r'rink|goal|ball|ramp|pente|skate|tribune|stadium|track'), ('water', r'water|pool|fountain'),
     ('ground', r'baseground|ground|floor|road|asphalt|pavement|dirt|gravel|sand'), ('shape', r'^sm_cube|^sm_cylinder|^sm_pyramide|^sm_pente|^sm_corner|cubehole|^sm_block'), ('decal', r'decal'), ('neon', r'neon'), ('crane', r'crane'),
     ('structure', r'concrete|brick|column|beam|stairs|catwalk|wall|floor|arch'), ('coin', r'coin'), ('balloon', r'balloon'), ('race', r'gate|flag|checkpoint'),
 ]
 def tags_for(name, category):
     n = name.lower(); t = [tag for tag, rx in TAG_RULES if re.search(rx, n)]
-    if category == 'Foliage' and 'tree' not in t and 'bush' not in t: t.append('tree')
+    if category == 'Foliage' and not t: t.append('tree')
     if category == 'Decals': t = ['decal']
     if category == 'Basic shape' and 'shape' not in t: t.append('shape')
     return t or ['prop']

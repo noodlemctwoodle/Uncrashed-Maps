@@ -4234,8 +4234,7 @@
   "bounds_estimated": false,
   "components": null,
   "tags": [
-   "ground",
-   "tree"
+   "ground"
   ],
   "thumbnail": "/Game/MapEditor/DataTables/Thumbnails/NewRow_180.NewRow_180"
  },
@@ -4261,8 +4260,7 @@
   "bounds_estimated": false,
   "components": null,
   "tags": [
-   "ground",
-   "tree"
+   "ground"
   ],
   "thumbnail": "/Game/MapEditor/DataTables/Thumbnails/NewRow_181.NewRow_181"
  },
@@ -4288,8 +4286,7 @@
   "bounds_estimated": false,
   "components": null,
   "tags": [
-   "ground",
-   "tree"
+   "ground"
   ],
   "thumbnail": "/Game/MapEditor/DataTables/Thumbnails/NewRow_662.NewRow_662"
  },
@@ -4315,8 +4312,7 @@
   "bounds_estimated": false,
   "components": null,
   "tags": [
-   "ground",
-   "tree"
+   "ground"
   ],
   "thumbnail": "/Game/MapEditor/DataTables/Thumbnails/NewRow_182.NewRow_182"
  },
@@ -4342,8 +4338,7 @@
   "bounds_estimated": false,
   "components": null,
   "tags": [
-   "ground",
-   "tree"
+   "ground"
   ],
   "thumbnail": "/Game/MapEditor/DataTables/Thumbnails/NewRow_184.NewRow_184"
  },
@@ -4369,8 +4364,7 @@
   "bounds_estimated": false,
   "components": null,
   "tags": [
-   "ground",
-   "tree"
+   "ground"
   ],
   "thumbnail": "/Game/MapEditor/DataTables/Thumbnails/NewRow_185.NewRow_185"
  },
@@ -4396,8 +4390,7 @@
   "bounds_estimated": false,
   "components": null,
   "tags": [
-   "ground",
-   "tree"
+   "ground"
   ],
   "thumbnail": "/Game/MapEditor/DataTables/Thumbnails/NewRow_186.NewRow_186"
  },
@@ -4423,8 +4416,7 @@
   "bounds_estimated": false,
   "components": null,
   "tags": [
-   "ground",
-   "tree"
+   "ground"
   ],
   "thumbnail": "/Game/MapEditor/DataTables/Thumbnails/NewRow_197.NewRow_197"
  },
@@ -4450,8 +4442,7 @@
   "bounds_estimated": false,
   "components": null,
   "tags": [
-   "ground",
-   "tree"
+   "ground"
   ],
   "thumbnail": "/Game/MapEditor/DataTables/Thumbnails/NewRow_376.NewRow_376"
  },
@@ -4477,8 +4468,7 @@
   "bounds_estimated": false,
   "components": null,
   "tags": [
-   "ground",
-   "tree"
+   "ground"
   ],
   "thumbnail": "/Game/MapEditor/DataTables/Thumbnails/NewRow_377.NewRow_377"
  },
@@ -4504,8 +4494,7 @@
   "bounds_estimated": false,
   "components": "1 components",
   "tags": [
-   "water",
-   "tree"
+   "water"
   ],
   "thumbnail": "/Game/MapEditor/DataTables/Thumbnails/NewRow_183_back.NewRow_183_back"
  },
@@ -6998,7 +6987,7 @@
   "bounds_estimated": false,
   "components": null,
   "tags": [
-   "tree"
+   "furniture"
   ],
   "thumbnail": "/Game/MapEditor/DataTables/Thumbnails/NewRow_159.NewRow_159"
  },
@@ -7024,8 +7013,7 @@
   "bounds_estimated": false,
   "components": null,
   "tags": [
-   "rock",
-   "tree"
+   "rock"
   ],
   "thumbnail": "/Game/MapEditor/DataTables/Thumbnails/NewRow_294.NewRow_294"
  },
@@ -7051,8 +7039,7 @@
   "bounds_estimated": false,
   "components": null,
   "tags": [
-   "rock",
-   "tree"
+   "rock"
   ],
   "thumbnail": "/Game/MapEditor/DataTables/Thumbnails/NewRow_71.NewRow_71"
  },
@@ -7078,8 +7065,7 @@
   "bounds_estimated": false,
   "components": null,
   "tags": [
-   "rock",
-   "tree"
+   "rock"
   ],
   "thumbnail": "/Game/MapEditor/DataTables/Thumbnails/NewRow_162.NewRow_162"
  },
@@ -10105,8 +10091,7 @@
   "bounds_estimated": false,
   "components": null,
   "tags": [
-   "rock",
-   "tree"
+   "rock"
   ],
   "thumbnail": "/Game/MapEditor/DataTables/Thumbnails/NewRow_175_back.NewRow_175_back"
  },
