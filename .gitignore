@@ -1,0 +1,14 @@
+# game-derived data (extracted assets, thumbnails, pak listings) never goes in the public repo
+data/extracted/
+data/thumbs/
+data/asset_thumbs/
+data/paklist.txt
+# raw downloads (regenerable): OSM dump, NYC tile mosaic
+data/centralpark_osm.json
+data/centralpark_ortho_z16.png
+# scratch
+*.pyc
+__pycache__/
+.DS_Store
+maps/*/preview.png
+maps/*/topdown.png

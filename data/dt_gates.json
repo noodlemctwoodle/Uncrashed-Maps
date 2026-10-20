@@ -1,0 +1,578 @@
+{
+ "STARTGATE": {
+  "GateTypes_3_0B7B6A7042AA2C4D07C220873BE60BA5": "E_ME_gatesTypes::NewEnumerator0",
+  "Thumbnail_13_6E12DE1A466E0E914BF12D8E76BF5DAA": "/Game/MapEditor/DataTables/Thumbnails/STARTGATE_v2.STARTGATE_v2",
+  "Mesh_8_B7A45BE340AFEE1FE6E92587C94FFC00": "/Game/BP/Race/Mesh/SM_fpvStand_ALL_me.SM_fpvStand_ALL_me",
+  "PreviewMesh_10_C052099E4CC9C128C9A0E09789AA5153": "/Game/BP/Race/Mesh/SM_fpvStand_ALL_me.SM_fpvStand_ALL_me",
+  "Blueprint_17_36F5600A469715636986A1B3C0C1C299": "/Game/BP/Race/Gates/Meshs/Gate/BP_Gate.BP_Gate_C",
+  "Start?_19_A4E3ECFD43C2A13A83186FB8F81DBC2B": true,
+  "PivotOffset_22_1C80C9384BADF7B2419947AF364C67A3": {
+   "X": 0.0,
+   "Y": 0.0,
+   "Z": -100.0
+  },
+  "BoxDetectTransform_25_6241CDBE49EB4D27842716828E0BD7E0": {
+   "Rotation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "W": 1.0
+   },
+   "Translation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0
+   },
+   "Scale3D": {
+    "X": 0.8500000238418579,
+    "Y": 1.0,
+    "Z": 0.8500000238418579
+   }
+  },
+  "OffsetIndicator_28_E1A5BD5F4D9F9FFCA81993B211249F33": {
+   "X": 0.0,
+   "Y": 0.0
+  },
+  "ShowPlanePreview_30_3186A3C144B5C9E00EBDF499971E6192": false
+ },
+ "DefaultGate": {
+  "GateTypes_3_0B7B6A7042AA2C4D07C220873BE60BA5": "E_ME_gatesTypes::NewEnumerator0",
+  "Thumbnail_13_6E12DE1A466E0E914BF12D8E76BF5DAA": "/Game/MapEditor/DataTables/Thumbnails/DefaultGate.DefaultGate",
+  "Mesh_8_B7A45BE340AFEE1FE6E92587C94FFC00": "/Game/BP/Race/Gates/Meshs/Gate/Gate2.Gate2",
+  "PreviewMesh_10_C052099E4CC9C128C9A0E09789AA5153": "/Game/BP/Race/Gates/Meshs/Gate/Gate2.Gate2",
+  "Blueprint_17_36F5600A469715636986A1B3C0C1C299": "/Game/BP/Race/Gates/Meshs/Gate/BP_Gate.BP_Gate_C",
+  "Start?_19_A4E3ECFD43C2A13A83186FB8F81DBC2B": false,
+  "PivotOffset_22_1C80C9384BADF7B2419947AF364C67A3": {
+   "X": 0.0,
+   "Y": 0.0,
+   "Z": -100.0
+  },
+  "BoxDetectTransform_25_6241CDBE49EB4D27842716828E0BD7E0": {
+   "Rotation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "W": 1.0
+   },
+   "Translation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0
+   },
+   "Scale3D": {
+    "X": 0.8500000238418579,
+    "Y": 1.0,
+    "Z": 0.8500000238418579
+   }
+  },
+  "OffsetIndicator_28_E1A5BD5F4D9F9FFCA81993B211249F33": {
+   "X": 0.0,
+   "Y": 0.0
+  },
+  "ShowPlanePreview_30_3186A3C144B5C9E00EBDF499971E6192": true
+ },
+ "DefaultOneW": {
+  "GateTypes_3_0B7B6A7042AA2C4D07C220873BE60BA5": "E_ME_gatesTypes::NewEnumerator1",
+  "Thumbnail_13_6E12DE1A466E0E914BF12D8E76BF5DAA": "/Game/MapEditor/DataTables/Thumbnails/DefaultOneW_back.DefaultOneW_back",
+  "Mesh_8_B7A45BE340AFEE1FE6E92587C94FFC00": "/Game/BP/Race/Gates/Meshs/Gate/Gate2.Gate2",
+  "PreviewMesh_10_C052099E4CC9C128C9A0E09789AA5153": "/Game/BP/Race/Gates/Meshs/OneWay1/SM_GateOneWay.SM_GateOneWay",
+  "Blueprint_17_36F5600A469715636986A1B3C0C1C299": "/Game/BP/Race/Gates/Meshs/Gate/BP_Gate.BP_Gate_C",
+  "Start?_19_A4E3ECFD43C2A13A83186FB8F81DBC2B": false,
+  "PivotOffset_22_1C80C9384BADF7B2419947AF364C67A3": {
+   "X": 0.0,
+   "Y": 0.0,
+   "Z": -100.0
+  },
+  "BoxDetectTransform_25_6241CDBE49EB4D27842716828E0BD7E0": {
+   "Rotation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "W": 1.0
+   },
+   "Translation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0
+   },
+   "Scale3D": {
+    "X": 0.8500000238418579,
+    "Y": 1.0,
+    "Z": 0.8500000238418579
+   }
+  },
+  "OffsetIndicator_28_E1A5BD5F4D9F9FFCA81993B211249F33": {
+   "X": 0.0,
+   "Y": 0.0
+  },
+  "ShowPlanePreview_30_3186A3C144B5C9E00EBDF499971E6192": true
+ },
+ "SideNeon": {
+  "GateTypes_3_0B7B6A7042AA2C4D07C220873BE60BA5": "E_ME_gatesTypes::NewEnumerator2",
+  "Thumbnail_13_6E12DE1A466E0E914BF12D8E76BF5DAA": "/Game/MapEditor/DataTables/Thumbnails/SideNeon.SideNeon",
+  "Mesh_8_B7A45BE340AFEE1FE6E92587C94FFC00": "/Game/BP/Race/Gates/Meshs/OneSide3/T_GateNeon01.T_GateNeon01",
+  "PreviewMesh_10_C052099E4CC9C128C9A0E09789AA5153": "/Game/BP/Race/Gates/Meshs/OneSide3/T_GateNeon01.T_GateNeon01",
+  "Blueprint_17_36F5600A469715636986A1B3C0C1C299": "/Game/BP/Race/Gates/Meshs/Gate/BP_Gate.BP_Gate_C",
+  "Start?_19_A4E3ECFD43C2A13A83186FB8F81DBC2B": false,
+  "PivotOffset_22_1C80C9384BADF7B2419947AF364C67A3": {
+   "X": 0.0,
+   "Y": 0.0,
+   "Z": 0.0
+  },
+  "BoxDetectTransform_25_6241CDBE49EB4D27842716828E0BD7E0": {
+   "Rotation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "W": 1.0
+   },
+   "Translation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0
+   },
+   "Scale3D": {
+    "X": 0.8500000238418579,
+    "Y": 1.0,
+    "Z": 0.8500000238418579
+   }
+  },
+  "OffsetIndicator_28_E1A5BD5F4D9F9FFCA81993B211249F33": {
+   "X": -50.0,
+   "Y": 125.0
+  },
+  "ShowPlanePreview_30_3186A3C144B5C9E00EBDF499971E6192": false
+ },
+ "Invisible": {
+  "GateTypes_3_0B7B6A7042AA2C4D07C220873BE60BA5": "E_ME_gatesTypes::NewEnumerator0",
+  "Thumbnail_13_6E12DE1A466E0E914BF12D8E76BF5DAA": "/Game/MapEditor/DataTables/Thumbnails/T_InvisibleGate.T_InvisibleGate",
+  "Mesh_8_B7A45BE340AFEE1FE6E92587C94FFC00": null,
+  "PreviewMesh_10_C052099E4CC9C128C9A0E09789AA5153": "/Game/BP/Race/Gates/Meshs/Invisible/SM_InvisibleGatePreview.SM_InvisibleGatePreview",
+  "Blueprint_17_36F5600A469715636986A1B3C0C1C299": "/Game/BP/Race/Gates/Meshs/Gate/BP_Gate.BP_Gate_C",
+  "Start?_19_A4E3ECFD43C2A13A83186FB8F81DBC2B": false,
+  "PivotOffset_22_1C80C9384BADF7B2419947AF364C67A3": {
+   "X": 0.0,
+   "Y": 0.0,
+   "Z": -150.0
+  },
+  "BoxDetectTransform_25_6241CDBE49EB4D27842716828E0BD7E0": {
+   "Rotation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "W": 1.0
+   },
+   "Translation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0
+   },
+   "Scale3D": {
+    "X": 2.0,
+    "Y": 1.0,
+    "Z": 1.5
+   }
+  },
+  "OffsetIndicator_28_E1A5BD5F4D9F9FFCA81993B211249F33": {
+   "X": 0.0,
+   "Y": 0.0
+  },
+  "ShowPlanePreview_30_3186A3C144B5C9E00EBDF499971E6192": false
+ },
+ "ClassicRound": {
+  "GateTypes_3_0B7B6A7042AA2C4D07C220873BE60BA5": "E_ME_gatesTypes::NewEnumerator5",
+  "Thumbnail_13_6E12DE1A466E0E914BF12D8E76BF5DAA": "/Game/MapEditor/DataTables/Thumbnails/ClassicRound_back.ClassicRound_back",
+  "Mesh_8_B7A45BE340AFEE1FE6E92587C94FFC00": "/Game/BP/Race/Gates/Meshs/Flags/Gate_Classic_01_Small.Gate_Classic_01_Small",
+  "PreviewMesh_10_C052099E4CC9C128C9A0E09789AA5153": "/Game/BP/Race/Gates/Meshs/Flags/Gate_Classic_01_Small.Gate_Classic_01_Small",
+  "Blueprint_17_36F5600A469715636986A1B3C0C1C299": "/Game/BP/Race/Gates/Meshs/Gate/BP_Gate.BP_Gate_C",
+  "Start?_19_A4E3ECFD43C2A13A83186FB8F81DBC2B": false,
+  "PivotOffset_22_1C80C9384BADF7B2419947AF364C67A3": {
+   "X": 0.0,
+   "Y": 0.0,
+   "Z": 0.0
+  },
+  "BoxDetectTransform_25_6241CDBE49EB4D27842716828E0BD7E0": {
+   "Rotation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "W": 1.0
+   },
+   "Translation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 51.43714904785156
+   },
+   "Scale3D": {
+    "X": 1.8942079544067383,
+    "Y": 1.0,
+    "Z": 2.361445903778076
+   }
+  },
+  "OffsetIndicator_28_E1A5BD5F4D9F9FFCA81993B211249F33": {
+   "X": 0.0,
+   "Y": 35.0
+  },
+  "ShowPlanePreview_30_3186A3C144B5C9E00EBDF499971E6192": true
+ },
+ "GateModul01": {
+  "GateTypes_3_0B7B6A7042AA2C4D07C220873BE60BA5": "E_ME_gatesTypes::NewEnumerator1",
+  "Thumbnail_13_6E12DE1A466E0E914BF12D8E76BF5DAA": "/Game/MapEditor/DataTables/Thumbnails/GateModul01_back.GateModul01_back",
+  "Mesh_8_B7A45BE340AFEE1FE6E92587C94FFC00": "/Game/BP/Race/Gates/Meshs/Flags/Gate_Modulable_02.Gate_Modulable_02",
+  "PreviewMesh_10_C052099E4CC9C128C9A0E09789AA5153": "/Game/BP/Race/Gates/Meshs/Flags/SM_GateModulable01_Preview.SM_GateModulable01_Preview",
+  "Blueprint_17_36F5600A469715636986A1B3C0C1C299": "/Game/BP/Race/Gates/Meshs/Gate/BP_Gate.BP_Gate_C",
+  "Start?_19_A4E3ECFD43C2A13A83186FB8F81DBC2B": false,
+  "PivotOffset_22_1C80C9384BADF7B2419947AF364C67A3": {
+   "X": 0.0,
+   "Y": 0.0,
+   "Z": 0.0
+  },
+  "BoxDetectTransform_25_6241CDBE49EB4D27842716828E0BD7E0": {
+   "Rotation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "W": 1.0
+   },
+   "Translation": {
+    "X": 0.0,
+    "Y": -0.0,
+    "Z": 74.61691284179688
+   },
+   "Scale3D": {
+    "X": 0.8274999856948853,
+    "Y": 1.0,
+    "Z": 0.7574999928474426
+   }
+  },
+  "OffsetIndicator_28_E1A5BD5F4D9F9FFCA81993B211249F33": {
+   "X": 0.0,
+   "Y": 0.0
+  },
+  "ShowPlanePreview_30_3186A3C144B5C9E00EBDF499971E6192": true
+ },
+ "Sideflag_0": {
+  "GateTypes_3_0B7B6A7042AA2C4D07C220873BE60BA5": "E_ME_gatesTypes::NewEnumerator2",
+  "Thumbnail_13_6E12DE1A466E0E914BF12D8E76BF5DAA": "/Game/MapEditor/DataTables/Thumbnails/Sideflag_0_back.Sideflag_0_back",
+  "Mesh_8_B7A45BE340AFEE1FE6E92587C94FFC00": "/Game/BP/Race/Gates/Meshs/OneSide2/Flag_Classic.Flag_Classic",
+  "PreviewMesh_10_C052099E4CC9C128C9A0E09789AA5153": "/Game/BP/Race/Gates/Meshs/OneSide2/Flag_Classic.Flag_Classic",
+  "Blueprint_17_36F5600A469715636986A1B3C0C1C299": "/Game/BP/Race/Gates/Meshs/Gate/BP_Gate.BP_Gate_C",
+  "Start?_19_A4E3ECFD43C2A13A83186FB8F81DBC2B": false,
+  "PivotOffset_22_1C80C9384BADF7B2419947AF364C67A3": {
+   "X": 0.0,
+   "Y": 0.0,
+   "Z": 0.0
+  },
+  "BoxDetectTransform_25_6241CDBE49EB4D27842716828E0BD7E0": {
+   "Rotation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "W": 1.0
+   },
+   "Translation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0
+   },
+   "Scale3D": {
+    "X": 0.8500000238418579,
+    "Y": 1.0,
+    "Z": 0.8500000238418579
+   }
+  },
+  "OffsetIndicator_28_E1A5BD5F4D9F9FFCA81993B211249F33": {
+   "X": -50.0,
+   "Y": 125.0
+  },
+  "ShowPlanePreview_30_3186A3C144B5C9E00EBDF499971E6192": false
+ },
+ "InflSide01": {
+  "GateTypes_3_0B7B6A7042AA2C4D07C220873BE60BA5": "E_ME_gatesTypes::NewEnumerator2",
+  "Thumbnail_13_6E12DE1A466E0E914BF12D8E76BF5DAA": "/Game/MapEditor/DataTables/Thumbnails/InflSide01.InflSide01",
+  "Mesh_8_B7A45BE340AFEE1FE6E92587C94FFC00": "/Game/BP/Race/Gates/Meshs/Inflatable/Flag_Inflated.Flag_Inflated",
+  "PreviewMesh_10_C052099E4CC9C128C9A0E09789AA5153": "/Game/BP/Race/Gates/Meshs/Inflatable/Flag_Inflated.Flag_Inflated",
+  "Blueprint_17_36F5600A469715636986A1B3C0C1C299": "/Game/BP/Race/Gates/Meshs/Gate/BP_Gate.BP_Gate_C",
+  "Start?_19_A4E3ECFD43C2A13A83186FB8F81DBC2B": false,
+  "PivotOffset_22_1C80C9384BADF7B2419947AF364C67A3": {
+   "X": 0.0,
+   "Y": 0.0,
+   "Z": 0.0
+  },
+  "BoxDetectTransform_25_6241CDBE49EB4D27842716828E0BD7E0": {
+   "Rotation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "W": 1.0
+   },
+   "Translation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0
+   },
+   "Scale3D": {
+    "X": 0.8500000238418579,
+    "Y": 1.0,
+    "Z": 0.8500000238418579
+   }
+  },
+  "OffsetIndicator_28_E1A5BD5F4D9F9FFCA81993B211249F33": {
+   "X": -50.0,
+   "Y": 125.0
+  },
+  "ShowPlanePreview_30_3186A3C144B5C9E00EBDF499971E6192": false
+ },
+ "InflSimpl02": {
+  "GateTypes_3_0B7B6A7042AA2C4D07C220873BE60BA5": "E_ME_gatesTypes::NewEnumerator0",
+  "Thumbnail_13_6E12DE1A466E0E914BF12D8E76BF5DAA": "/Game/MapEditor/DataTables/Thumbnails/InflSimpl02.InflSimpl02",
+  "Mesh_8_B7A45BE340AFEE1FE6E92587C94FFC00": "/Game/BP/Race/Gates/Meshs/Inflatable/Gate_Simple_02.Gate_Simple_02",
+  "PreviewMesh_10_C052099E4CC9C128C9A0E09789AA5153": "/Game/BP/Race/Gates/Meshs/Inflatable/Gate_Simple_02.Gate_Simple_02",
+  "Blueprint_17_36F5600A469715636986A1B3C0C1C299": "/Game/BP/Race/Gates/Meshs/Gate/BP_Gate.BP_Gate_C",
+  "Start?_19_A4E3ECFD43C2A13A83186FB8F81DBC2B": false,
+  "PivotOffset_22_1C80C9384BADF7B2419947AF364C67A3": {
+   "X": 0.0,
+   "Y": 0.0,
+   "Z": 0.0
+  },
+  "BoxDetectTransform_25_6241CDBE49EB4D27842716828E0BD7E0": {
+   "Rotation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "W": 1.0
+   },
+   "Translation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 150.0
+   },
+   "Scale3D": {
+    "X": 1.7999999523162842,
+    "Y": 1.0,
+    "Z": 1.5499999523162842
+   }
+  },
+  "OffsetIndicator_28_E1A5BD5F4D9F9FFCA81993B211249F33": {
+   "X": 0.0,
+   "Y": 0.0
+  },
+  "ShowPlanePreview_30_3186A3C144B5C9E00EBDF499971E6192": true
+ },
+ "InflSimpl01": {
+  "GateTypes_3_0B7B6A7042AA2C4D07C220873BE60BA5": "E_ME_gatesTypes::NewEnumerator0",
+  "Thumbnail_13_6E12DE1A466E0E914BF12D8E76BF5DAA": "/Game/MapEditor/DataTables/Thumbnails/InflSimpl01.InflSimpl01",
+  "Mesh_8_B7A45BE340AFEE1FE6E92587C94FFC00": "/Game/BP/Race/Gates/Meshs/Inflatable/Gate_Simple_01.Gate_Simple_01",
+  "PreviewMesh_10_C052099E4CC9C128C9A0E09789AA5153": "/Game/BP/Race/Gates/Meshs/Inflatable/Gate_Simple_01.Gate_Simple_01",
+  "Blueprint_17_36F5600A469715636986A1B3C0C1C299": "/Game/BP/Race/Gates/Meshs/Gate/BP_Gate.BP_Gate_C",
+  "Start?_19_A4E3ECFD43C2A13A83186FB8F81DBC2B": false,
+  "PivotOffset_22_1C80C9384BADF7B2419947AF364C67A3": {
+   "X": 0.0,
+   "Y": 0.0,
+   "Z": 0.0
+  },
+  "BoxDetectTransform_25_6241CDBE49EB4D27842716828E0BD7E0": {
+   "Rotation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "W": 1.0
+   },
+   "Translation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 150.0
+   },
+   "Scale3D": {
+    "X": 1.5,
+    "Y": 1.0,
+    "Z": 1.649999976158142
+   }
+  },
+  "OffsetIndicator_28_E1A5BD5F4D9F9FFCA81993B211249F33": {
+   "X": 0.0,
+   "Y": 0.0
+  },
+  "ShowPlanePreview_30_3186A3C144B5C9E00EBDF499971E6192": true
+ },
+ "InflRound01": {
+  "GateTypes_3_0B7B6A7042AA2C4D07C220873BE60BA5": "E_ME_gatesTypes::NewEnumerator5",
+  "Thumbnail_13_6E12DE1A466E0E914BF12D8E76BF5DAA": "/Game/MapEditor/DataTables/Thumbnails/InflRound01.InflRound01",
+  "Mesh_8_B7A45BE340AFEE1FE6E92587C94FFC00": "/Game/BP/Race/Gates/Meshs/Inflatable/Round_Gate.Round_Gate",
+  "PreviewMesh_10_C052099E4CC9C128C9A0E09789AA5153": "/Game/BP/Race/Gates/Meshs/Inflatable/Round_Gate.Round_Gate",
+  "Blueprint_17_36F5600A469715636986A1B3C0C1C299": "/Game/BP/Race/Gates/Meshs/Gate/BP_Gate.BP_Gate_C",
+  "Start?_19_A4E3ECFD43C2A13A83186FB8F81DBC2B": false,
+  "PivotOffset_22_1C80C9384BADF7B2419947AF364C67A3": {
+   "X": 0.0,
+   "Y": 0.0,
+   "Z": 0.0
+  },
+  "BoxDetectTransform_25_6241CDBE49EB4D27842716828E0BD7E0": {
+   "Rotation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "W": 1.0
+   },
+   "Translation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 430.0
+   },
+   "Scale3D": {
+    "X": 1.5,
+    "Y": 1.0,
+    "Z": 1.5
+   }
+  },
+  "OffsetIndicator_28_E1A5BD5F4D9F9FFCA81993B211249F33": {
+   "X": 0.0,
+   "Y": 0.0
+  },
+  "ShowPlanePreview_30_3186A3C144B5C9E00EBDF499971E6192": true
+ },
+ "InflElev01": {
+  "GateTypes_3_0B7B6A7042AA2C4D07C220873BE60BA5": "E_ME_gatesTypes::NewEnumerator0",
+  "Thumbnail_13_6E12DE1A466E0E914BF12D8E76BF5DAA": "/Game/MapEditor/DataTables/Thumbnails/InflElev01.InflElev01",
+  "Mesh_8_B7A45BE340AFEE1FE6E92587C94FFC00": "/Game/BP/Race/Gates/Meshs/Inflatable/Gate_Elevated.Gate_Elevated",
+  "PreviewMesh_10_C052099E4CC9C128C9A0E09789AA5153": "/Game/BP/Race/Gates/Meshs/Inflatable/Gate_Elevated.Gate_Elevated",
+  "Blueprint_17_36F5600A469715636986A1B3C0C1C299": "/Game/BP/Race/Gates/Meshs/Gate/BP_Gate.BP_Gate_C",
+  "Start?_19_A4E3ECFD43C2A13A83186FB8F81DBC2B": false,
+  "PivotOffset_22_1C80C9384BADF7B2419947AF364C67A3": {
+   "X": 0.0,
+   "Y": 0.0,
+   "Z": 0.0
+  },
+  "BoxDetectTransform_25_6241CDBE49EB4D27842716828E0BD7E0": {
+   "Rotation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "W": 1.0
+   },
+   "Translation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 475.0
+   },
+   "Scale3D": {
+    "X": 1.850000023841858,
+    "Y": 1.0,
+    "Z": 1.4500000476837158
+   }
+  },
+  "OffsetIndicator_28_E1A5BD5F4D9F9FFCA81993B211249F33": {
+   "X": 0.0,
+   "Y": 0.0
+  },
+  "ShowPlanePreview_30_3186A3C144B5C9E00EBDF499971E6192": true
+ },
+ "InflDive01": {
+  "GateTypes_3_0B7B6A7042AA2C4D07C220873BE60BA5": "E_ME_gatesTypes::NewEnumerator0",
+  "Thumbnail_13_6E12DE1A466E0E914BF12D8E76BF5DAA": "/Game/MapEditor/DataTables/Thumbnails/InflDive01_back.InflDive01_back",
+  "Mesh_8_B7A45BE340AFEE1FE6E92587C94FFC00": "/Game/BP/Race/Gates/Meshs/Inflatable/Dive_Gate_01.Dive_Gate_01",
+  "PreviewMesh_10_C052099E4CC9C128C9A0E09789AA5153": "/Game/BP/Race/Gates/Meshs/Inflatable/Dive_Gate_01.Dive_Gate_01",
+  "Blueprint_17_36F5600A469715636986A1B3C0C1C299": "/Game/BP/Race/Gates/Meshs/Gate/BP_Gate.BP_Gate_C",
+  "Start?_19_A4E3ECFD43C2A13A83186FB8F81DBC2B": false,
+  "PivotOffset_22_1C80C9384BADF7B2419947AF364C67A3": {
+   "X": 0.0,
+   "Y": 0.0,
+   "Z": 0.0
+  },
+  "BoxDetectTransform_25_6241CDBE49EB4D27842716828E0BD7E0": {
+   "Rotation": {
+    "X": 0.6156597137451172,
+    "Y": 0.0,
+    "Z": 0.0,
+    "W": 0.7880120873451233
+   },
+   "Translation": {
+    "X": 0.0,
+    "Y": 5.2275390625,
+    "Z": 383.6651306152344
+   },
+   "Scale3D": {
+    "X": 1.5,
+    "Y": 1.0,
+    "Z": 1.399999976158142
+   }
+  },
+  "OffsetIndicator_28_E1A5BD5F4D9F9FFCA81993B211249F33": {
+   "X": 0.0,
+   "Y": 0.0
+  },
+  "ShowPlanePreview_30_3186A3C144B5C9E00EBDF499971E6192": true
+ },
+ "InflDive02": {
+  "GateTypes_3_0B7B6A7042AA2C4D07C220873BE60BA5": "E_ME_gatesTypes::NewEnumerator0",
+  "Thumbnail_13_6E12DE1A466E0E914BF12D8E76BF5DAA": "/Game/MapEditor/DataTables/Thumbnails/InflDive02_back.InflDive02_back",
+  "Mesh_8_B7A45BE340AFEE1FE6E92587C94FFC00": "/Game/BP/Race/Gates/Meshs/Inflatable/Dive_Gate_02.Dive_Gate_02",
+  "PreviewMesh_10_C052099E4CC9C128C9A0E09789AA5153": "/Game/BP/Race/Gates/Meshs/Inflatable/Dive_Gate_02.Dive_Gate_02",
+  "Blueprint_17_36F5600A469715636986A1B3C0C1C299": "/Game/BP/Race/Gates/Meshs/Gate/BP_Gate.BP_Gate_C",
+  "Start?_19_A4E3ECFD43C2A13A83186FB8F81DBC2B": false,
+  "PivotOffset_22_1C80C9384BADF7B2419947AF364C67A3": {
+   "X": 0.0,
+   "Y": 0.0,
+   "Z": 0.0
+  },
+  "BoxDetectTransform_25_6241CDBE49EB4D27842716828E0BD7E0": {
+   "Rotation": {
+    "X": 0.3826833665370941,
+    "Y": 0.0,
+    "Z": 0.0,
+    "W": 0.9238795638084412
+   },
+   "Translation": {
+    "X": 0.0,
+    "Y": -128.136962890625,
+    "Z": 480.8341064453125
+   },
+   "Scale3D": {
+    "X": 1.9500000476837158,
+    "Y": 1.0,
+    "Z": 1.8600000143051147
+   }
+  },
+  "OffsetIndicator_28_E1A5BD5F4D9F9FFCA81993B211249F33": {
+   "X": 0.0,
+   "Y": 0.0
+  },
+  "ShowPlanePreview_30_3186A3C144B5C9E00EBDF499971E6192": true
+ },
+ "InflRond02": {
+  "GateTypes_3_0B7B6A7042AA2C4D07C220873BE60BA5": "E_ME_gatesTypes::NewEnumerator5",
+  "Thumbnail_13_6E12DE1A466E0E914BF12D8E76BF5DAA": "/Game/MapEditor/DataTables/Thumbnails/InflRond02.InflRond02",
+  "Mesh_8_B7A45BE340AFEE1FE6E92587C94FFC00": "/Game/BP/Race/Gates/Meshs/Inflatable/Round_Gate_02.Round_Gate_02",
+  "PreviewMesh_10_C052099E4CC9C128C9A0E09789AA5153": "/Game/BP/Race/Gates/Meshs/Inflatable/Round_Gate_02.Round_Gate_02",
+  "Blueprint_17_36F5600A469715636986A1B3C0C1C299": "/Game/BP/Race/Gates/Meshs/Gate/BP_Gate.BP_Gate_C",
+  "Start?_19_A4E3ECFD43C2A13A83186FB8F81DBC2B": false,
+  "PivotOffset_22_1C80C9384BADF7B2419947AF364C67A3": {
+   "X": 0.0,
+   "Y": 0.0,
+   "Z": -173.0
+  },
+  "BoxDetectTransform_25_6241CDBE49EB4D27842716828E0BD7E0": {
+   "Rotation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0,
+    "W": 1.0
+   },
+   "Translation": {
+    "X": 0.0,
+    "Y": 0.0,
+    "Z": 0.0
+   },
+   "Scale3D": {
+    "X": 1.5,
+    "Y": 1.0,
+    "Z": 1.5
+   }
+  },
+  "OffsetIndicator_28_E1A5BD5F4D9F9FFCA81993B211249F33": {
+   "X": 0.0,
+   "Y": 0.0
+  },
+  "ShowPlanePreview_30_3186A3C144B5C9E00EBDF499971E6192": true
+ }
+}
