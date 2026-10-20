@@ -117,19 +117,28 @@ the 6 km board is rotated 44° from north and its corners reach 4.2 km.
 ## Third map: Central Park
 
 `python3 tools/build_centralpark.py` builds and installs **CentralPark** ("New York City - Central Park") from
-OpenStreetMap on the flat Empty board. `tools/osm.py` turns an Overpass dump (`data/centralpark_osm.json`, not in the
-repo; fetch it with the query in the script) into `data/centralpark_features.json`: polygons (water with islands,
-lawns, woods, rock outcrops, plazas, buildings with heights), lines (paths, drives, transverses, arches) and points
-(5,000 mapped trees, benches, lamps, statues). The frame (`data/centralpark_frame.json`) puts the origin on the Mall at
-the Literary Walk with the Mall running up −Y, so the freestyle spawn looks straight up the elm walk to Bethesda
-Terrace. Every lake and pond is tiled with water, every path and drive is paved along its real geometry, the 19
-mapped arches and bridges are raised decks on stone abutments you can fly under, and landmarks OSM only names are
-modelled on top: the Mall's four elm rows, Bethesda Terrace with its arcade, twin stairs and the Angel fountain,
-Belvedere Castle on a Vista Rock mound over Turtle Pond, the Obelisk, Bow Bridge, the Carousel, Delacorte, the
-Bandshell, Tavern on the Green, Cherry Hill, the Imagine mosaic (a decal), the Reservoir's fence and the Sheep Meadow
-fence. The surrounding city uses OSM footprints and heights (supertalls by name) with window decals only on faces that
-look at the park. About 61,000 instances; `--lite` drops sidewalks, roof clutter and distant small buildings.
-Reference imagery: `data/centralpark_naip.png` (USGS NAIP, public domain). OSM data © OpenStreetMap contributors, ODbL.
+OpenStreetMap on the grassy **BaseLandscape02** level: the only base with real grass (the Empty board is a numbered
+grid and Bp_Grass renders grey on Mac), flat to within 2 m, and its board matches the game's 2.2 km flight box. The
+landscape is not centred on the origin (it spans −1209..+806 m on both axes, measured from its heightmap), so the
+frame (`data/centralpark_frame.json`) puts the origin on the Mall at Bethesda Terrace: the spawn looks north over the
+fountain and the Lake, and the map covers the park from Central Park South to the Great Lawn plus Midtown to about
+56th Street. `tools/osm.py` turns an Overpass dump (not in the repo) into `data/centralpark_features.json`.
+
+Everything is placed asset-first through `tools/mapkit.py`: the 43 arches and bridges are stone arch portals with a
+deck, stone parapets and ramps or real stairs; retaining walls, the transverse-road trenches, fences, playground and
+rink enclosures and step railings are fence, wall and parapet meshes; benches are oriented along their path facing
+it (the mapped benches use OSM positions); city buildings up to 60 m are textured building and house meshes with box
+massing only where no mesh fits; park cottages are house and pavilion meshes; kiosks are the editor's booth meshes.
+Surfaces sit on per-material height bands with staggered pieces so paths never z-fight. Every object stands on the
+terrain at its own position. Detail: water with island holes and rocky banks, streams, the Mall's four elm rows,
+Bethesda Terrace with arcade, stairs and the Angel fountain, Belvedere on Vista Rock, the Obelisk, Bow Bridge, the
+Carousel, Delacorte, the Bandshell, Tavern on the Green, Cherry Hill, ballfields, tennis courts, the Sheep Meadow
+fence, 10,000 trees in the park (5,000 at mapped positions by genus), lamps and benches on every path, vendors at
+every gate and along Central Park South, boats, crowds, traffic and lamps on the framing streets, Columbus Circle
+and Grand Army Plaza, and the Imagine mosaic as a decal. About 44,000 instances; `--lite` drops sidewalks, roof
+clutter and distant small buildings. Build-time check: `tools/mapcheck.py ... --base L_BaseLandscape02` (zero
+floating, zero buried). Reference imagery: `data/centralpark_naip.png` (USGS NAIP). OSM data © OpenStreetMap
+contributors, ODbL.
 
 ## Code style
 
@@ -218,8 +227,10 @@ The tools are formatted with [ruff](https://docs.astral.sh/ruff/) (`python3 -m r
 `tools/preview.py <map.json> <out.png> [cx cy radius]` renders an oblique preview of any map without the game.
 `tools/raceline.py <map.json> [--clearance m]` reports every race leg that a mesh or the terrain blocks,
 `tools/racemap.py <map.json> <out.png> [half-size m]` draws the race plan (footprints, numbered gates with
-opening heights, straight legs, start arrow) top-down, `tools/mapcheck.py <map.json>` lists floating, buried and
-off-landscape objects, and `tools/bounds_fix.py` completes `data/catalog.json` with bounds for basic shapes and
+opening heights, straight legs, start arrow) top-down, `tools/mapcheck.py <map.json> [--base L_...|--flat 0]` lists floating, buried and
+off-landscape objects (supports are indexed by their whole footprint), `tools/mapkit.py` is the shared asset-first
+placement kit (bridges from arch and parapet meshes, stairs, walls and fences from panels, oriented benches,
+kiosks, mesh-first building massing, z-layered surfaces), and `tools/bounds_fix.py` completes `data/catalog.json` with bounds for basic shapes and
 blueprint rows (union of their component meshes). `data/gate_bounds.json` holds each gate row's pivot and
 detection-box offset. The heightmap sampler was validated against six player-built Workshop maps on the Mountain
 landscape (ground objects within 0.1 m). The measured conventions (gate yaw, pivots, decal basis, placement rules) are summarised in this README and in the tool docstrings.
