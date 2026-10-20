@@ -37,7 +37,7 @@ for a in m['S_AssetsTransform']:
         s = t['Scale3D']; x, y, z = t['Translation']['X'] / 100, t['Translation']['Y'] / 100, t['Translation']['Z'] / 100
         if math.hypot(x - cx0, y - cy0) > radius * 1.3: continue
         lx, ly, lz = s['X'] * bx, s['Y'] * by, s['Z'] * bz
-        if lx > 1500: continue
+        if lx > 1500 and row not in ('NewRow_268', 'NewRow_303'): continue      # huge ground slabs (park lawn base, city slab) are drawn as ground
         yaw = 2 * math.atan2(t['Rotation']['Z'], t['Rotation']['W'])
         z0 = z + zoff * s['Z'] if row not in ('NewRow_303',) else z - 0.29 * s['Z']
         if row in ('NewRow_13', 'NewRow_256', 'NewRow_109', 'NewRow_46', 'NewRow_14', 'NewRow_261', 'NewRow_113', 'NewRow_103', 'NewRow_257', 'NewRow_93', 'NewRow_775'): z0 = z - lz / 2
