@@ -46,6 +46,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from uasset import Asset
 
 
+# Rendered-surface offset above the decoded heightmap, measured from player-built Workshop maps: ground-standing
+# objects and ground planes on BaseLandscape02 sit 0.30 m above the decoded height (3 maps, 3,600 objects), on
+# BaseLandscape04 within 0.1 m of it (6 maps). Applied inside height_cm so every tool sees the real surface.
+SURFACE_OFFSET_CM = {'L_BaseLandscape02': 30.0, 'L_BaseLandscape04': 0.0}
+
+
 class Landscape:
     """Heightmap sampler for one cooked level.
 
@@ -66,6 +72,7 @@ class Landscape:
         Raises IndexError if the level has no ``RootComponent0`` export or no landscape components.
         """
         self.a = a = Asset(base + '.uasset')
+        self.surface_offset = SURFACE_OFFSET_CM.get(os.path.basename(base), 0.0)
         self.bulk = open(base + '.ubulk', 'rb').read() if os.path.exists(base + '.ubulk') else b''
         self.exp = a.exp
         root = self._props(self._export_index('RootComponent0'))
@@ -206,7 +213,7 @@ class Landscape:
             px(i0, j0 + 1) * (1 - tx) + px(i0 + 1, j0 + 1) * tx
         ) * ty
         # LANDSCAPE_ZSCALE = 1/128: 16-bit heights are centred on 32768 and scaled by the actor's Z scale.
-        return self.loc[2] + (hgt - 32768) * self.scale[2] / 128.0
+        return self.surface_offset + self.loc[2] + (hgt - 32768) * self.scale[2] / 128.0
 
 
 if __name__ == '__main__':

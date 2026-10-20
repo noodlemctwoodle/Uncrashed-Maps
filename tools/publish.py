@@ -9,6 +9,7 @@ any app from a VDF, which is the same item type the game's own publish dialog cr
 update the same item.
 
 usage: publish.py <MapName> [--write]     prints (or writes maps/<Name>/workshop.vdf) and the steamcmd command"""
+
 import json
 import os
 import sys
@@ -19,9 +20,18 @@ APPID = 1682970  # Uncrashed: FPV Drone Simulator
 
 def vdf(name, meta):
     folder = os.path.join(ROOT, 'maps', name)
-    lines = ['"workshopitem"', '{', f'    "appid" "{APPID}"', f'    "publishedfileid" "{meta.get("publishedfileid", 0)}"', f'    "contentfolder" "{folder}"',
-             f'    "previewfile" "{os.path.join(folder, meta.get("preview", "Thumbnail.jpg"))}"', f'    "visibility" "{meta.get("visibility", 0)}"',
-             f'    "title" "{meta["title"]}"', f'    "description" "{meta["description"]}"', f'    "changenote" "{meta.get("changenote", "")}"']
+    lines = [
+        '"workshopitem"',
+        '{',
+        f'    "appid" "{APPID}"',
+        f'    "publishedfileid" "{meta.get("publishedfileid", 0)}"',
+        f'    "contentfolder" "{folder}"',
+        f'    "previewfile" "{os.path.join(folder, meta.get("preview", "Thumbnail.jpg"))}"',
+        f'    "visibility" "{meta.get("visibility", 0)}"',
+        f'    "title" "{meta["title"]}"',
+        f'    "description" "{meta["description"]}"',
+        f'    "changenote" "{meta.get("changenote", "")}"',
+    ]
     if meta.get('tags'):
         lines += ['    "tags"', '    {'] + [f'        "{i}" "{t}"' for i, t in enumerate(meta['tags'])] + ['    }']
     lines.append('}')

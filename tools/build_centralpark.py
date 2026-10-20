@@ -21,7 +21,7 @@ Layers: 1 water and surfaces from polygons, 2 paths/drives/transverse trenches/b
 4 hand-placed landmarks, 5 buildings (park structures and the city) with window decals facing the park, 6 trees,
 7 furniture, vendors and people, 8 Columbus Circle and Grand Army Plaza, 9 the Imagine mosaic decal, then output.
 Occupancy grid (4 m): 0 free, 1 path, 2 water, 3 hard, 4 lawn, 5 wood.
-usage: build_centralpark.py [--no-windows] [--lite]
+usage: build_centralpark.py [--no-windows] [--lite] [--no-trees] [--no-city] [--editor = both]
 """
 
 import hashlib
@@ -49,6 +49,12 @@ NAME, DISPLAY = 'CentralPark', 'New York City - Central Park'
 BASE = 'BaseLandscape02'
 WITH_WINDOWS = '--no-windows' not in sys.argv
 LITE = '--lite' in sys.argv
+NO_TREES = (
+    '--no-trees' in sys.argv or '--editor' in sys.argv
+)  # verification builds: the editor loads far faster without the 13,000 trees
+NO_CITY = (
+    '--no-city' in sys.argv or '--editor' in sys.argv
+)  # ... and without the 10,000 buildings and streets outside the park
 rng = random.Random(7)
 FRAME = json.load(open(os.path.join(DATA, 'centralpark_frame.json')))
 FR = Frame(FRAME['lat0'], FRAME['lon0'], FRAME['axis_deg'], True)
@@ -111,7 +117,7 @@ def st(k, n=1):
 def gz(x, y):
     """Ground-top height (m) at local (x, y); None off the landscape."""
     h = LAND.height_cm(x * 100, y * 100)
-    return None if h is None else h / 100.0 + 0.03
+    return None if h is None else h / 100.0 + 0.02
 
 
 G0 = gz(0, 0)
@@ -319,7 +325,8 @@ def parse_width(v):
 
 
 def water_level(pts):
-    """One level per water body: the highest ground under it plus 5 cm, so the sheet never sinks below the grass."""
+    """One level per water body: the highest ground under it plus 30 cm (Workshop maps on this level put water 5-33 cm
+    above the surface, and the grass blades hide anything lower)."""
     xs = [q[0] for q in pts]
     ys = [q[1] for q in pts]
     hs = [
@@ -329,7 +336,7 @@ def water_level(pts):
         if point_in_poly(x, y, pts)
     ]
     hs = [h for h in hs if h is not None]
-    return (max(hs) if hs else G0) + 0.05
+    return (max(hs) if hs else G0) + 0.30
 
 
 # ---- 1. water and surfaces from OSM polygons -------------------------------------------------------------
@@ -354,7 +361,7 @@ for p in F['polys']:
                     water_tiles += 1
         mark_poly(pts, 2, p['holes'])
         if inside:  # a rocky bank hides the water sheet's edge where the ground dips below it
-            for x, y, yaw, dist in along_line(pts + pts[:1], 7.0):
+            for x, y, yaw, dist in along_line(pts + pts[:1], 12.0):
                 put(rng.choice(ROCKS), *l2w(x, y, yaw, 0, 1.2), 0.0, rng.uniform(0.7, 1.3), rng.uniform(0, 6.28))
                 st('bank_rocks')
         if tags.get('name') == 'The Lake':
@@ -421,8 +428,11 @@ for p in F['polys']:
         for _ in range(max(2, int(a // 150))):
             x, y = rng.uniform(cx - 15, cx + 15), rng.uniform(cy - 15, cy + 15)
             if point_in_poly(x, y, pts):
-                s = rng.uniform(1.2, 2.6)
-                put(rng.choice(ROCKS + [CLIFF]), x, y, 0.3, s, rng.uniform(0, 6.28))
+                row = rng.choice(ROCKS + ROCKS + [CLIFF])
+                s = (
+                    rng.uniform(0.18, 0.32) if row == CLIFF else rng.uniform(1.2, 2.2)
+                )  # the cliff mesh is 16 m tall: keep outcrops under 5 m
+                put(row, x, y, 0.3, s, rng.uniform(0, 6.28))
                 st('rocks')
     elif k == 'fountain' and inside and a > 20:
         g = ground(cx, cy)
@@ -473,7 +483,7 @@ for l in F['lines']:
     if abs(mid[0]) > BOARD + 100 or abs(mid[1]) > BOARD + 100:
         continue
     inside = in_park(*mid)
-    if not inside and k in ('footway', 'path', 'steps', 'pedestrian', 'bridleway', 'cycleway'):
+    if not inside and (NO_CITY or k in ('footway', 'path', 'steps', 'pedestrian', 'bridleway', 'cycleway')):
         continue
     if l['tags'].get('tunnel') == 'yes' and not inside:
         continue
@@ -490,7 +500,7 @@ for l in F['lines']:
         mat = 'asphalt'
     bridge = l['tags'].get('bridge') == 'yes'
     if not bridge:  # bridges are built as arches below, with their own deck
-        kit.ribbon(pts, w, mat)
+        kit.ribbon(pts, w, mat, max_piece=32.0)
     mark_line(pts, w, 1)
     path_lines.append((pts, w, mat, inside, k, l['tags'].get('name') or '', bridge))
     if not inside and k in ('residential', 'tertiary', 'secondary', 'primary') and not LITE:
@@ -816,6 +826,8 @@ for p in F['polys']:
         if key.lower() in nm.lower():
             h = max(h, hh)
     inside = in_park(cx, cy)
+    if not inside and NO_CITY:
+        continue
     if not h:
         h = 6.0 if inside else (22.0 if a < 800 else 35.0)
     if LITE and not inside and math.hypot(cx, cy - 600) > 1300 and a < 400:
@@ -842,11 +854,12 @@ for p in F['polys']:
             u, v = rng.uniform(-(lx + 30) / 2, (lx + 30) / 2), rng.uniform(-(ly + 30) / 2, (ly + 30) / 2)
             fr_ = max(abs(u) / ((lx + 30) / 2), abs(v) / ((ly + 30) / 2))
             dz = 11.5 if fr_ <= 0.62 else (8.0 if fr_ <= 0.8 else 4.0)
+            row = rng.choice(ROCKS + [CLIFF])
             put(
-                rng.choice(ROCKS + [CLIFF]),
+                row,
                 *l2w(rx, ry, th, u, v),
                 dz - 0.3,
-                rng.uniform(1.5, 3.0),
+                rng.uniform(0.3, 0.5) if row == CLIFF else rng.uniform(1.5, 2.5),
                 rng.uniform(0, 6.28),
             )
         base = g + 11.5
@@ -1032,10 +1045,10 @@ def tree(x, y, row=None, s=None):
 
 
 for p in F['points']:
-    if p['kind'] == 'tree' and in_park(p['x'], p['y']):
+    if p['kind'] == 'tree' and in_park(p['x'], p['y']) and not NO_TREES:
         tree(p['x'], p['y'], tree_row(p['tags']))
 for p in F['polys']:
-    if p['kind'] != 'wood' or not in_park(*centroid(p['pts'])):
+    if p['kind'] != 'wood' or not in_park(*centroid(p['pts'])) or NO_TREES:
         continue
     xs = [q[0] for q in p['pts']]
     ys = [q[1] for q in p['pts']]
@@ -1051,7 +1064,7 @@ for p in F['polys']:
             n -= 1
 xs = [q[0] for q in PARK]
 ys = [q[1] for q in PARK]
-want = int(poly_area(PARK) / 420)
+want = 0 if NO_TREES else int(poly_area(PARK) / 420)
 for _ in range(want * 4):
     if want <= 0:
         break
@@ -1066,7 +1079,13 @@ for _ in range(want * 4):
     if tree(x, y):
         want -= 1
 for p in F['points']:
-    if p['kind'] == 'tree' and not in_park(p['x'], p['y']) and not LITE and building_at(p['x'], p['y'], 0.5) is None:
+    if (
+        p['kind'] == 'tree'
+        and not in_park(p['x'], p['y'])
+        and not LITE
+        and not NO_TREES
+        and building_at(p['x'], p['y'], 0.5) is None
+    ):
         put(rng.choice(TREES), p['x'], p['y'], 0, rng.uniform(0.8, 1.1), rng.uniform(0, 6.28))
         st('street_trees')
 for p in F['polys']:  # the Conservatory Garden's hedges, if it is on the board
@@ -1115,15 +1134,15 @@ for pts, w, mat, inside, k, nm, bridge in path_lines:
         continue
     drive = mat == 'asphalt' and w >= 11
     for x, y, yaw, dist in along_line(pts, 1.0):
-        side = 1 if int(dist / 25) % 2 == 0 else -1
-        if dist % 25 < 1 and cell(x, y) not in mapped_lamps:
+        side = 1 if int(dist / 36) % 2 == 0 else -1
+        if dist % 36 < 1 and cell(x, y) not in mapped_lamps:
             put(LAMP_SHORT, *l2w(x, y, yaw, 0, side * (w / 2 + 0.6)), 0, 1.0, yaw + side * math.pi / 2)
             st('lamps')
-        if dist % 11 < 1 and (drive or k == 'pedestrian'):
+        if dist % 18 < 1 and (drive or k == 'pedestrian'):
             kit.bench(*l2w(x, y, yaw, 0, -side * (w / 2 + 0.9)), yaw, -side)
-        if dist % 60 < 1:
+        if dist % 110 < 1:
             put(TRASH, *l2w(x, y, yaw, 1.5, side * (w / 2 + 0.5)), 0, 1.0, yaw)
-        if dist % (14 if drive else 28) < 1:
+        if dist % (24 if drive else 44) < 1:
             put(
                 rng.choice(PEOPLE),
                 *l2w(x, y, yaw, 0, rng.uniform(-w / 2 + 0.6, w / 2 - 0.6)),
@@ -1132,7 +1151,7 @@ for pts, w, mat, inside, k, nm, bridge in path_lines:
                 yaw + (0 if rng.random() < 0.5 else math.pi),
             )
             st('people')
-        if drive and dist % 45 < 1:
+        if drive and dist % 70 < 1:
             put(rng.choice(CARS), *l2w(x, y, yaw, 0, rng.choice([-3.0, 3.0])), LAYER['asphalt'], 1.0, yaw)
             st('cars')
 for p in F['polys']:
@@ -1202,7 +1221,7 @@ for pts, w, mat, inside, k, nm, bridge in path_lines:
         for (dx, dy) in ((0, 0), (120, 0), (-120, 0), (0, 120), (0, -120))
     ):
         continue
-    for x, y, yaw, dist in along_line(pts, 36):
+    for x, y, yaw, dist in along_line(pts, 52):
         if building_at(x, y, 0.5) is not None:
             continue
         put(
@@ -1233,7 +1252,7 @@ COL = next(
     ),
     None,
 )
-if COL and abs(COL[0]) < BOARD and abs(COL[1]) < BOARD:
+if COL and abs(COL[0]) < BOARD and abs(COL[1]) < BOARD and not NO_CITY:
     cx, cy = COL
     g = ground(cx, cy)
     kit.surface('flagstone', cx, cy, 50, 50)
@@ -1254,7 +1273,7 @@ if COL and abs(COL[0]) < BOARD and abs(COL[1]) < BOARD:
 GAP = sorted(
     (p for p in F['polys'] if p['tags'].get('name') == 'Grand Army Plaza'), key=lambda p: centroid(p['pts'])[1]
 )
-if len(GAP) >= 2:
+if len(GAP) >= 2 and not NO_CITY:
     for p in GAP:
         for q, (rx, ry, lx, ly, th) in enumerate(fill_rects(p['pts'], 8)):
             kit.surface('flagstone', rx, ry, lx, ly, th, q)

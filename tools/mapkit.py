@@ -202,6 +202,8 @@ class MapKit:
                 x, y = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
                 h = (height / size(row)[2]) if height else 1.0
                 gz_ = self.g(x, y) + rest(row) - 0.15  # 15 cm sunk so slopes never show a gap
+            if row == PARAPET:
+                sfit = sfit * 4.0  # one 0.94 m parapet section stretched to 3.76 m
                 if axis == "x":
                     self.add(row, x, y, gz_, sfit, 1.0, h, yaw)
                 else:
@@ -249,7 +251,7 @@ class MapKit:
     def _raised_parapet(self, pts, z):
         (x0, y0), (x1, y1) = pts
         L = math.hypot(x1 - x0, y1 - y0)
-        n = max(1, int(round(L / 0.94)))
+        n = max(1, int(round(L / 3.76)))
         yaw = math.atan2(y1 - y0, x1 - x0)
         for q in range(n):
             t = (q + 0.5) / n
